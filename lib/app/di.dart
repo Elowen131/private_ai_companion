@@ -117,7 +117,7 @@ Future<void> setupDependencies() async {
   getIt.registerSingleton<BackupService>(BackupService(db, appDir.path));
 
   // ---------- 推理抽象层：端侧优先 → Mock 兜底 ----------
-  // 活跃 provider 是 FallbackLlmProvider：先尝试 LocalLlmProvider（llm_llamacpp 端侧），
+  // 活跃 provider 是 FallbackLlmProvider：先尝试 LocalLlmProvider（llamadart 端侧），
   // 模型未就绪时无缝降级到 MockLlmProvider，保证永远有回复、绝不崩溃。
   // LocalLlmProvider 通过 pathResolver 惰性读取「当前选用的 GGUF 路径」：
   // 用户在模型管理中下载并选用模型后，下一次对话即自动切到本地推理，无需改代码。

@@ -40,7 +40,13 @@ dependencies:
   http_parser: ^4.0.2
   # SHA-256 流式校验（下载后完整性校验，防模型被篡改）
   crypto: ^3.0.3
-  llm_llamacpp: ^0.7.0
+  # 端侧 LLM 推理底座（方案 9）：llamadart。
+  # 原 llm_llamacpp 0.7.0 的 iOS 原生库路径损坏（预编译包缺 llama.framework、
+  # 源码构建不产出 framework 目录、hook 每次强制重下载覆盖缓存），无法在 CI 构建；
+  # llamadart 是维护积极的后继包，iOS 走 XCFramework + SwiftPM，device/模拟器均支持，
+  # 含 App Store 隐私清单。llamadart_llama_cpp_flutter 为 iOS/macOS 的 SwiftPM 伴侣包。
+  llamadart: ^0.17.5
+  llamadart_llama_cpp_flutter: ^0.17.3   # iOS/macOS 的 llama.cpp XCFramework 伴侣包
   image_picker: ^1.2.4
 
 dev_dependencies:

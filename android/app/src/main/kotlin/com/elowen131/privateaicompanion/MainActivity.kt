@@ -14,7 +14,7 @@ import io.flutter.plugin.common.MethodChannel
  * 应用入口 Activity，承载两个平台通道：
  *
  * 1) `private_ai_companion/llm` —— 端侧推理**诊断**通道。真实的 GGUF 推理由 Dart 侧
- *    `llm_llamacpp` 插件直接完成（见 LocalLlmProvider），不经过本通道；这里保留
+ *    `llamadart` 插件直接完成（见 LocalLlmProvider），不经过本通道；这里保留
  *    ping/loadModel/generate 声明，仅用于原生在场性探测与后续扩展。
  *
  * 2) `private_ai_companion/overlay` —— 桌面/伴生悬浮窗通道。Activity 只负责权限探测、
@@ -48,7 +48,7 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LLM_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    // 诊断用：真实推理在 Dart 侧 llm_llamacpp 插件，通道本身不承载模型。
+                    // 诊断用：真实推理在 Dart 侧 llamadart 插件，通道本身不承载模型。
                     "ping" -> result.success(false)
                     "loadModel" -> result.success(false)
                     "generate" -> result.success(false)

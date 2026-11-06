@@ -1,43 +1,44 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:llm_llamacpp/llm_llamacpp.dart'
+import 'package:llamadart/llamadart.dart'
     show
-        LlamaCppChatRepository,
-        GenerationOptions,
-        LLMMessage,
-        LLMRole;
+        LlamaEngine,
+        LlamaModel,
+        ModelSource,
+        ModelParams,
+        LlamaChatMessage,
+        LlamaChatRole,
+        GenerationParams;
 
 import 'types.dart';
 import 'llm_provider.dart';
 
 /// 端侧 LLM 实现（方案 9：本地推理底座）。
 ///
-/// 直接接入现成的 [llm_llamacpp] 插件（底层 llama.cpp），在设备本地运行 GGUF
-/// 量化模型，文本与权重**不出设备**。无需任何自定义原生 MethodChannel。
+/// 接入 [llamadart]（llm_llamacpp 的后继、维护积极的包，底层 llama.cpp），在设备
+/// 本地运行 GGUF 量化模型，文本与权重**不出设备**。无需任何自定义原生 MethodChannel。
 ///
 /// 路由约定（与 [FallbackLlmProvider] 配合）：
 ///   - [pathResolver] 返回当前选用的 GGUF 本地路径；为空 / 文件不存在 → 未就绪，
 ///     由 Fallback 无缝降级到 Mock，保证 UI 与交互永远有回复。
-///   - 模型文件存在即视为「就绪」；真正的原生加载延迟到首次 inference（在独立
-///     isolate 中惰性加载），若加载失败 [streamChat] 会抛异常，仍由 Fallback 兜底。
+///   - 模型文件存在即视为「就绪」；真正的原生加载延迟到首次 inference（惰性创建的
+///     [LlamaEngine]），若加载失败 [streamChat] 会抛异常，仍由 Fallback 兜底。
 class LocalLlmProvider implements LlmProvider {
   /// 惰性解析当前选用的 GGUF 本地路径；可在运行时随「下载模型」而变化。
   final Future<String?> Function() pathResolver;
 
   final int contextSize;
-  final int threads;
   final int nGpuLayers;
 
-  LlamaCppChatRepository? _repo;
+  LlamaEngine? _engine;
   String? _resolvedPath;
-  String? _repoPath; // 当前 _repo 实际加载的模型路径，用于检测「换了模型」
+  String? _enginePath; // 当前 _engine 实际加载的模型路径，用于检测「换了模型」
   bool _loaded = false;
 
   LocalLlmProvider({
     required this.pathResolver,
     this.contextSize = 4096,
-    this.threads = 4,
     this.nGpuLayers = 0,
   });
 
@@ -49,7 +50,7 @@ class LocalLlmProvider implements LlmProvider {
 
   /// 解析并校验模型路径；文件存在且非空才视为就绪（原生加载延迟到首次推理）。
   ///
-  /// 只判 `existsSync()` 会把下载中断留下的 0 字节残片交给 llama.cpp 加载并崩溃，
+  /// 只判 `existsSync()` 会把下载中断留下的 0 字节残片交给运行时加载并崩溃，
   /// 因此这里同时要求长度大于 0；[ModelManager.isDownloaded] 还会额外校验长度匹配。
   Future<bool> load() async {
     final p = await pathResolver();
@@ -65,9 +66,7 @@ class LocalLlmProvider implements LlmProvider {
     _loaded = ok;
     if (!ok) {
       _resolvedPath = null;
-      _repo?.dispose();
-      _repo = null;
-      _repoPath = null;
+      await _disposeEngine();
     } else {
       _resolvedPath = p;
     }
@@ -75,24 +74,47 @@ class LocalLlmProvider implements LlmProvider {
   }
 
   Future<void> unload() async {
-    _repo?.dispose();
-    _repo = null;
-    _repoPath = null;
+    await _disposeEngine();
     _resolvedPath = null;
     _loaded = false;
   }
 
-  LLMRole _role(String role) {
+  Future<void> _disposeEngine() async {
+    final e = _engine;
+    if (e != null) {
+      _engine = null;
+      _enginePath = null;
+      await e.dispose();
+    }
+  }
+
+  LlamaChatRole _role(String role) {
     switch (role) {
       case 'system':
-        return LLMRole.system;
+        return LlamaChatRole.system;
       case 'assistant':
-        return LLMRole.assistant;
+        return LlamaChatRole.assistant;
       case 'tool':
-        return LLMRole.tool;
+        return LlamaChatRole.tool;
       default:
-        return LLMRole.user;
+        return LlamaChatRole.user;
     }
+  }
+
+  /// 惰性获取（或重建）已加载指定模型路径的 [LlamaEngine]。
+  /// 路径变化（用户换了模型）则销毁旧引擎并重建。
+  Future<LlamaEngine> _ensureEngine(String path) async {
+    if (_engine != null && _enginePath == path) return _engine!;
+    await _disposeEngine();
+    _engine = await LlamaEngine.load(
+      LlamaModel(ModelSource.parse(Uri.file(path).toString())),
+      params: ModelParams(
+        contextSize: contextSize,
+        gpuLayers: nGpuLayers,
+      ),
+    );
+    _enginePath = path;
+    return _engine!;
   }
 
   @override
@@ -105,38 +127,36 @@ class LocalLlmProvider implements LlmProvider {
     }
 
     // 用 [load] 已校验过的路径，避免二次调用 pathResolver 返回 null 后 `!` 崩溃，
-    // 也避免「load 与推理之间模型被删」时把空路径交给原生层。
+    // 也避免「load 与推理之间模型被删」时把空路径交给运行时层。
     final path = _resolvedPath;
     if (path == null) {
       yield const LlmChunk('（端侧模型已不可用）', isDone: true);
       return;
     }
-    // 路径变化（用户换了模型）则重建仓库。
-    if (_repo == null || _repoPath != path) {
-      _repo?.dispose();
-      _repo = LlamaCppChatRepository.withModelPath(
-        path,
-        contextSize: contextSize,
-        threads: threads,
-        nGpuLayers: nGpuLayers,
-      );
-      _repoPath = path;
-    }
+    // 路径变化（用户换了模型）则重建引擎。
+    final engine = await _ensureEngine(path);
 
     final messages = request.messages
-        .map((m) => LLMMessage(role: _role(m.role), content: m.content))
+        .map(
+          (m) => LlamaChatMessage.fromText(
+            role: _role(m.role),
+            text: m.content,
+          ),
+        )
         .toList();
 
     try {
-      await for (final chunk in _repo!.streamChatWithGenerationOptions(
-        'local', // 仅用于校验/日志；真实路径取自 _resolvedPath。
-        messages: messages,
-        generationOptions: GenerationOptions(
-          temperature: request.temperature,
+      await for (final chunk in engine.create(
+        messages,
+        params: GenerationParams(
           maxTokens: request.maxTokens,
+          temp: request.temperature,
         ),
       )) {
-        yield LlmChunk(chunk.message?.content ?? '', isDone: chunk.done ?? false);
+        final text = chunk.text;
+        if (text.isNotEmpty) {
+          yield LlmChunk(text);
+        }
       }
     } catch (_) {
       // 交由 FallbackLlmProvider 捕获并降级到 Mock，避免对话断流。

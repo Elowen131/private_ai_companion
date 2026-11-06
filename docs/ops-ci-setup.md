@@ -10,7 +10,7 @@
 | 环节 | 工具链 | 关键版本 | 说明 |
 |------|--------|----------|------|
 | 开发 dev | Flutter SDK + Dart | Flutter 3.47.9 / Dart 3.x | 见 `pubspec.yaml`；Java 17（Android 编译） |
-| 开发 dev | Android SDK / NDK | `flutter.ndkVersion` | `llm_llamacpp` 等原生插件需 NDK |
+| 开发 dev | Android SDK / NDK | `flutter.ndkVersion` | `llamadart` 等原生插件需 NDK |
 | 测试 test | `flutter test` | 同 dev | 308 项单测；**须解除代理**（`env -u http_proxy ...`）否则沙箱网络拦截导致卡死 |
 | 生产 prod | `flutter build apk --release` | 同 dev | R8 混淆 + 资源压缩开启；需生产签名密钥 |
 
@@ -28,10 +28,11 @@
   3. `flutter analyze --fatal-infos`（warning/info 视为失败）
   4. `flutter test`（已清空代理环境变量）
 - **Job `build-android`**（需 quality 通过）：
-  1. `android-actions/setup-android` 装 SDK + 接受许可证
-  2. `sdkmanager "ndk;28.2.13676358"`（须与 Flutter 默认 `ndkVersion` 一致；
+  1. runner 预装 SDK + `sdkmanager` 装 SDK 平台与 NDK（**不再用 `android-actions/setup-android`**，
+     该 action 会安装已下架的 legacy `tools` 包而失败）
+  2. `sdkmanager "platforms;android-36" "ndk;28.2.13676358"`（须与 Flutter 默认 `ndkVersion` 一致；
      Flutter 3.47.9 默认即此值，见 `FlutterExtension.kt`。**版本不匹配会导致
-     `llm_llamacpp` 等原生插件构建失败**——早期 CI 失败即源于此）
+     `llamadart` 等原生插件构建失败**——早期 CI 失败即源于此）
   3. `flutter build apk --release` —— **无签名密钥时自动回退 debug 签名**，仅验证编译链路
   4. `flutter build appbundle --release` —— 产出 Play Store 上架标准 AAB（同样回退 debug 签名）
   5. 上传 `app-release.apk` 与 `app-release.aab` 作为校验产物（`if-no-files-found: ignore`）
@@ -97,21 +98,17 @@
       Kotlin 包目录、`AndroidManifest` 的 `DAILY_REMINDER` action 已同步；iOS Bundle ID 已对齐为
       同一字符串）。Google Play / App Store 均不再使用占位 `com.example`。
 - [x] **iOS 工程已生成**（`flutter create --platforms=ios .`），CI 已加 `build-ios` 编译校验任务。
-- [x] **iOS 原生库（llm_llamacpp 0.7.0）在 CI 自行编译并「预编译缓存注入」`llama.framework`**：该包 0.7.0
-      的 iOS 路径**完全损坏**——GitHub Release 的 `ios-arm64` 预编译包缺失 `llama.framework`，而源码构建
-      分支只产出 `libllama.dylib`（iOS 收集器却要求 `llama.framework` 目录），两条路在 iOS 上都会失败
-      （android/linux/macos/windows 是单文件，正常）。CI 的 `build-ios` 在 `flutter pub get` 之后：
-      (1) 用上游锁定的 llama.cpp 提交 `25ae3a9b331fffea50ff8d07a5cad34c33f1276f` 克隆进
-      `~/.pub-cache/.../llm_llamacpp-0.7.0/llamacpp/`；(2) 用 CMake 为 iOS **模拟器**(arm64) 编译
-      llama.cpp（CPU-only，关闭 Metal 以降 CI 风险），组装出 `llama.framework` + ggml 依赖 dylib 并修复
-      rpath；(3) **把该 `llama.framework` 直接注入到 hook 的预编译缓存目录**
-      `.dart_tool/hooks_runner/shared/llm_llamacpp/build/.cache/v0.7.0-abi*-ios-arm64/`，让上游 hook
-      在 `_tryDownloadPrebuilt` 里命中该缓存、跳过其损坏的下载/源码构建逻辑（比直接改第三方 hook 源码更稳
-      定——补丁方式已验证在 CI 上不可靠，第三方文件不可见且 recompile 行为不可控）。
-      `build-ios` 超时已调到 90 分钟。CI 仅为编译校验（`flutter build ios --simulator`），真机/上架的
-      Metal 版本请在本机/发布流程自行构建。
-- [x] **已弃用 `ci-scripts/patch_llamacpp_hook.py`**：经验证，直接修改 `llm_llamacpp` 的 `hook/build.dart`
-      在 CI 上不可靠（stack trace 显示仍是未打补丁的原始 hook 在跑），故改为上述「缓存注入」方案，并删除该脚本。
+- [x] **iOS 端侧推理底座已从 `llm_llamacpp` 迁移到 `llamadart`**：`llm_llamacpp` 0.7.0 的 iOS 原生库路径
+      **完全损坏**（GitHub Release 的 `ios-arm64` 预编译包缺失 `lama.framework`、源码构建分支不产出
+      `framework` 目录、hook 每次强制重新下载并覆盖缓存），在 CI 上无法修复。已改用维护积极的后继包
+      `llamadart`（0.17.5）+ iOS SwiftPM 伴侣包 `llamadart_llama_cpp_flutter`（0.17.3），其自带维护良好的
+      iOS 原生资产（XCFramework），`flutter build ios` 会自动解析并嵌入，**无需本仓库手动编译 / 注入**。
+      `LocalLlmProvider` 已改写为 `llamadart` 的 `LlamaEngine` API（`LlamaModel` + `ModelSource` +
+      `GenerationParams`，流式走 `engine.create(...)` 的 `chunk.text`）。
+- [x] **iOS 部署目标升至 16.4**：`llamadart` 要求 iOS ≥ 16.4（`Podfile` 的 `platform :ios` 与
+      `project.pbxproj` 中三处 `IPHONEOS_DEPLOYMENT_TARGET` 均已改），否则 `flutter build ios` 报错。
+- [x] **已删除 `ci-scripts/patch_llamacpp_hook.py` 与「缓存注入」步骤**：经多轮验证，直接修改第三方 hook 源码
+      在 CI 上不可靠（recompile 行为不可控），且缓存注入被 hook 的强制重下载覆盖；改用 llamadart 后彻底规避。
 - [x] **本地数据库已 SQLCipher 整库加密**，密钥落系统安全存储；`PRIVACY.md` 与设置页「本地加密」说明已就绪。
 - [ ] **iOS 真机/App Store 签名**：在本地 macOS + Xcode 打开 `ios/Runner.xcworkspace`，
       给 `Runner` 与 `RunnerTests` 两个 target 设置 **Development Team**（Signing & Capabilities）。
