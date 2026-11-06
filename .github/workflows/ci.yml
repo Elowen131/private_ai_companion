@@ -9,8 +9,11 @@
 #  - 如需在 CI 产出可上架产物，请用仓库 Secrets 注入签名（见 docs/ops-ci-setup.md）。
 #  - NDK 版本须与本地 Flutter 默认 ndkVersion 严格一致（Flutter 3.47.9 -> 28.2.13676358，
 #    见 FlutterExtension.kt）。版本不匹配会导致 llm_llamacpp 等原生插件构建失败。
-#  - iOS 在 CI 用 `--no-codesign` 仅做编译校验；真机/上架签名需在本地 macOS + Xcode 配置
+#  - iOS 在 CI 用 `flutter build ios --simulator` 仅做编译校验（无需 Apple 账号 /
+#    Development Team）。真机 / App Store 签名需在本地 macOS + Xcode 配置
 #    Development Team（见 docs/ops-ci-setup.md）。
+#  - Android 直接用 GitHub ubuntu runner 预装的 Android SDK + sdkmanager 安装 NDK 与
+#    compileSdk 平台，不再使用 android-actions/setup-android（其会安装已下架的 tools 包而失败）。
 name: CI
 
 on:
@@ -110,13 +113,18 @@ jobs:
           cache: true
           cache-key: "flutter-${{ env.FLUTTER_VERSION }}-pub-${{ hashFiles('**/pubspec.lock') }}"
 
-      - name: Setup Android SDK & accept licenses
-        uses: android-actions/setup-android@v3
-
-      - name: Install NDK (llm_llamacpp 等原生插件需要，须与 flutter.ndkVersion 一致)
-        # 若与本地 flutter.ndkVersion 不符，请把 env.NDK_VERSION 改为本地
-        # `flutter doctor` 提示的版本（或 FlutterExtension.kt 中的默认值）。
-        run: sdkmanager "ndk;${{ env.NDK_VERSION }}"
+      - name: Setup Android SDK & NDK (use runner's preinstalled SDK)
+        # GitHub ubuntu-latest runner 已预装 Android SDK（ANDROID_HOME 已设）。
+        # 不再使用 android-actions/setup-android@v3：该 action 会尝试安装已被仓库
+        # 移除的 legacy 'tools' 包，报 "Failed to find package 'tools'" 而失败。
+        # 这里直接用内置 sdkmanager 接受许可证，并安装 NDK 与 compileSdk 平台
+        # （Flutter 3.47.9 -> compileSdk/targetSdk=36，ndkVersion=28.2.13676358）。
+        run: |
+          # 动态定位 sdkmanager（runner 的 cmdline-tools 子目录可能是 latest 或版本号如 16.0）。
+          SDKMGR=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          export PATH="$(dirname "$SDKMGR"):$PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "ndk;${{ env.NDK_VERSION }}"
 
       - name: Pub get
         run: flutter pub get
@@ -187,15 +195,17 @@ jobs:
       - name: Flutter doctor (diagnostics)
         run: flutter doctor -v
 
-      - name: Build iOS (no code signing -> compile verification only)
-        # flutter build ios 内部会自动执行 pod install（ios/Podfile 已就位），
-        # 将 sqflite_sqlcipher 等原生 pod 接入工程；--no-codesign 仅做编译校验。
-        run: flutter build ios --release --no-codesign
+      - name: Build iOS (simulator -> compile verification, no Apple Team needed)
+        # 真机/上架需要 Development Team + Provisioning Profile；CI 无 Apple 账号，
+        # 改用模拟器构建做编译校验（不需要签名/Team）。历史运行显示原生代码本身
+        # 已编译成功（"Xcode build done"），仅「可部署包」步骤要求 Team，模拟器构建绕开它。
+        # flutter build ios 内部自动执行 pod install（ios/Podfile 已就位）。
+        run: flutter build ios --simulator
 
       - name: Upload iOS app artifact (verification only)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Runner-unsigned-app
-          path: build/ios/iphoneos/Runner.app
+          path: build/ios/iphonesimulator/Runner.app
           if-no-files-found: ignore
