@@ -152,7 +152,7 @@ void main() {
   });
 
   group('成人选项 · 下体建模', () {
-    int _groinCount(AvatarMesh m) {
+    int groinCount(AvatarMesh m) {
       var n = 0;
       for (final r in m.regionIds) {
         if (r == AvatarRegion.groin.index) n++;
@@ -160,7 +160,7 @@ void main() {
       return n;
     }
 
-    double _groinExtent(AvatarMesh m) {
+    double groinExtent(AvatarMesh m) {
       // 下体几何在 Y 方向的跨度：随 genitalSize 放大而增大。
       double lo = double.infinity, hi = double.negativeInfinity;
       for (var v = 0; v < m.vertexCount; v++) {
@@ -172,7 +172,7 @@ void main() {
       return hi - lo;
     }
 
-    AvatarMesh _lower(AvatarLowerSex sex,
+    AvatarMesh lower(AvatarLowerSex sex,
         {bool clothed = false, double size = 0.5}) {
       final t = AvatarTuning.forStyle(AvatarStyle.realistic)
           .withClothed(clothed)
@@ -182,20 +182,20 @@ void main() {
     }
 
     test('裸身 + 男/女 生成下体几何；平滑（neutral）不生成', () {
-      expect(_groinCount(_lower(AvatarLowerSex.male)), greaterThan(0));
-      expect(_groinCount(_lower(AvatarLowerSex.female)), greaterThan(0));
-      expect(_groinCount(_lower(AvatarLowerSex.neutral)), 0);
+      expect(groinCount(lower(AvatarLowerSex.male)), greaterThan(0));
+      expect(groinCount(lower(AvatarLowerSex.female)), greaterThan(0));
+      expect(groinCount(lower(AvatarLowerSex.neutral)), 0);
     });
 
     test('穿衣模式下不生成下体几何（成人选项关闭时的安全默认）', () {
-      expect(_groinCount(_lower(AvatarLowerSex.male, clothed: true)), 0);
-      expect(_groinCount(_lower(AvatarLowerSex.female, clothed: true)), 0);
+      expect(groinCount(lower(AvatarLowerSex.male, clothed: true)), 0);
+      expect(groinCount(lower(AvatarLowerSex.female, clothed: true)), 0);
     });
 
     test('下体尺寸（genitalSize）放大下体几何的体量', () {
-      final small = _lower(AvatarLowerSex.female, size: 0.5);
-      final big = _lower(AvatarLowerSex.female, size: 1.6);
-      expect(_groinExtent(big), greaterThan(_groinExtent(small)),
+      final small = lower(AvatarLowerSex.female, size: 0.5);
+      final big = lower(AvatarLowerSex.female, size: 1.6);
+      expect(groinExtent(big), greaterThan(groinExtent(small)),
           reason: '尺寸增大应放大骨盆前壁/阴阜体量');
     });
 
@@ -206,8 +206,8 @@ void main() {
       final on = AvatarTuning.forStyle(AvatarStyle.realistic)
           .withClothed(false)
           .withLowerSex(AvatarLowerSex.male);
-      expect(_groinCount(build(spec, off)), 0);
-      expect(_groinCount(build(spec, on)), greaterThan(0));
+      expect(groinCount(build(spec, off)), 0);
+      expect(groinCount(build(spec, on)), greaterThan(0));
     });
 
     test('resetAll 保留成人选项（clothed / lowerBodySex）不被静默复位', () {
