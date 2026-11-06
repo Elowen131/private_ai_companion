@@ -153,9 +153,12 @@ class LocalLlmProvider implements LlmProvider {
           temp: request.temperature,
         ),
       )) {
-        final text = chunk.text;
-        if (text.isNotEmpty) {
-          yield LlmChunk(text);
+        // 文本在 chunk.choices[].delta.content（String?）；多 choice 时逐个吐出。
+        for (final choice in chunk.choices) {
+          final text = choice.delta.content;
+          if (text != null && text.isNotEmpty) {
+            yield LlmChunk(text);
+          }
         }
       }
     } catch (_) {
