@@ -12,13 +12,13 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.2
+  cupertino_icons: ^2.0.0
   # 多语言：Material/Cupertino 框架文案（复制/粘贴菜单、系统对话框等）本地化
   flutter_localizations:
     sdk: flutter
 
   # 依赖注入（轻量、无代码生成）
-  get_it: ^7.6.7
+  get_it: ^9.3.0
 
   # 本地文件 / 路径
   path_provider: ^2.1.2
@@ -31,7 +31,7 @@ dependencies:
   sqflite_common: ^2.5.0   # 直接依赖：使用可设置的全局 databaseFactory（测试夹具替换为 FFI）
 
   # 数据库加密密钥存储：落到系统安全存储（Android Keystore / iOS Keychain / 桌面 DPAPI）
-  flutter_secure_storage: ^9.0.0
+  flutter_secure_storage: ^11.2.0
 
   # 工具
   uuid: ^4.3.3
@@ -54,7 +54,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^6.0.0
   sqflite_common_ffi: ^2.3.3   # 仅测试期使用：Linux CI 上以 FFI 真 SQLite 替代原生加密插件（见 flutter_test_config.dart）
 
 flutter:
