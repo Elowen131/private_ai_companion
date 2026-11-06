@@ -80,13 +80,7 @@ jobs:
       - name: Test
         # 测试套件约 300+ 项；flutter_test_config.dart 已全局把 databaseFactory 切到
         # FFI 真 SQLite，不依赖 Android/iOS 原生加密插件（Linux CI 无该原生实现）。
-        # 禁止代理以规避沙箱网络拦截。
         run: flutter test
-        env:
-          HTTP_PROXY: ""
-          HTTPS_PROXY: ""
-          http_proxy: ""
-          https_proxy: ""
 
   # ---------------------------------------------------------------------------
   # 2) 生产构建可编译性校验（Android）
