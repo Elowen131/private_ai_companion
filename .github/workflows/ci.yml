@@ -160,7 +160,7 @@ jobs:
     name: Build iOS (release, verify compile)
     needs: quality
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -192,6 +192,45 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      - name: Provide llama.cpp source for iOS native build
+        # 关键背景（否则 build-ios 必败，报 "Missing native library llama.framework"
+        # 然后 "Failed to build llama.cpp for ios-arm64"）：
+        #   - llm_llamacpp 0.7.0 的 iOS 预编译包（release 0.7.0 的 ios-arm64 产物，
+        #     见 github.com/brynjen/dart-llm/releases/tag/0.7.0）本身缺失 llama.framework，
+        #     因此 hook 下载解压后判定该预编译包 "unusable"，回退到源码构建。
+        #   - 但 pub.dev 发布的包不含 llamacpp/ 子模块（上游 README 明确说明），
+        #     源码构建分支又要求在该目录下找到 llama.cpp 源码，于是 CI 上两条路都走不通。
+        # 解决办法：把上游在 0.7.0 标签锁定的 llama.cpp 提交克隆进包的 llamacpp/ 目录，
+        # 让 hook 走「源码构建」分支（与 build-release.yaml 产出预编译包用的是同一套
+        # CMake 逻辑），在 macOS runner 上就地编译出可用的 llama.framework。
+        # 该提交即 packages/llm_llamacpp/llamacpp 子模块在 0.7.0 标签的锁定 commit。
+        env:
+          LLAMACPP_COMMIT: "25ae3a9b331fffea50ff8d07a5cad34c33f1276f"
+        run: |
+          # 源码构建需要 CMake；macOS runner 通常预装，缺失时再装。
+          if ! command -v cmake >/dev/null 2>&1; then
+            brew install cmake
+          fi
+          cmake --version
+          # 定位 pub 缓存中的 llm_llamacpp 包目录（flutter-action 默认在 ~/ .pub-cache）。
+          PKG=$(find "$HOME/.pub-cache" -type d -name 'llm_llamacpp-0.7.0' | head -1)
+          echo "llm_llamacpp package dir: $PKG"
+          if [ -z "$PKG" ]; then
+            echo "::error::llm_llamacpp package not found in pub cache"
+            exit 1
+          fi
+          # 若 llamacpp/ 子模块不存在，则按锁定 commit 浅克隆进来（blob 惰性下载，省时）。
+          if [ ! -e "$PKG/llamacpp/CMakeLists.txt" ]; then
+            rm -rf "$PKG/llamacpp"
+            git clone --filter=blob:none --no-checkout \
+              https://github.com/ggml-org/llama.cpp.git "$PKG/llamacpp"
+            git -C "$PKG/llamacpp" fetch --depth 1 origin "$LLAMACPP_COMMIT"
+            git -C "$PKG/llamacpp" checkout "$LLAMACPP_COMMIT"
+          else
+            echo "llama.cpp source already present, skipping clone"
+          fi
+          ls "$PKG/llamacpp" | head
+
       - name: Flutter doctor (diagnostics)
         run: flutter doctor -v
 
@@ -200,6 +239,8 @@ jobs:
         # 改用模拟器构建做编译校验（不需要签名/Team）。历史运行显示原生代码本身
         # 已编译成功（"Xcode build done"），仅「可部署包」步骤要求 Team，模拟器构建绕开它。
         # flutter build ios 内部自动执行 pod install（ios/Podfile 已就位）。
+        # 本步骤触发的 native-assets hook 会就地用上面准备的 llama.cpp 源码构建
+        # iOS 所需的 llama.framework（无 Apple Team 也能完成编译校验）。
         run: flutter build ios --simulator
 
       - name: Upload iOS app artifact (verification only)
