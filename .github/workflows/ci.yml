@@ -173,6 +173,11 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      - name: Install CocoaPods dependencies
+        # ios/Podfile 已就位；首次 pod install 需在 macOS runner 上拉取 spec 仓库，
+        # 这里显式执行以确保 sqflite_sqlcipher 等原生 pod 接入工程。
+        run: cd ios && pod install
+
       - name: Build iOS (no code signing -> compile verification only)
         run: flutter build ios --release --no-codesign
 
