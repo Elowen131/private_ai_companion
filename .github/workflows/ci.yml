@@ -14,6 +14,9 @@
 #    Development Team（见 docs/ops-ci-setup.md）。
 #  - Android 直接用 GitHub ubuntu runner 预装的 Android SDK + sdkmanager 安装 NDK 与
 #    compileSdk 平台，不再使用 android-actions/setup-android（其会安装已下架的 tools 包而失败）。
+#  - iOS 的 llm_llamacpp 原生库：该包 0.7.0 的 iOS 路径损坏（预编译包缺 llama.framework、
+#    源码构建又不产出 framework 目录），故 CI 在 macOS runner 上自行用锁定的 llama.cpp
+#    提交编译出可用 llama.framework 并注入（见 build-ios 步骤与 ci-scripts/patch_llamacpp_hook.py）。
 name: CI
 
 on:
@@ -153,7 +156,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 3) 生产构建可编译性校验（iOS）
-  #    使用 --no-codesign 仅做编译校验，不产出可上架的签名包；
+  #    使用 --simulator 仅做编译校验，不产出可上架的签名包；
   #    真机/App Store 签名需在本地 macOS + Xcode 配置 Development Team。
   # ---------------------------------------------------------------------------
   build-ios:
@@ -192,113 +195,102 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
-      - name: Provide llama.cpp source for iOS native build
-        # 关键背景（否则 build-ios 必败，报 "Missing native library llama.framework"
-        # 然后 "Failed to build llama.cpp for ios-arm64"）：
-        #   - llm_llamacpp 0.7.0 的 iOS 预编译包（release 0.7.0 的 ios-arm64 产物，
-        #     见 github.com/brynjen/dart-llm/releases/tag/0.7.0）本身缺失 llama.framework，
-        #     因此 hook 下载解压后判定该预编译包 "unusable"，回退到源码构建。
-        #   - 但 pub.dev 发布的包不含 llamacpp/ 子模块（上游 README 明确说明），
-        #     源码构建分支又要求在该目录下找到 llama.cpp 源码，于是 CI 上两条路都走不通。
-        # 解决办法：把上游在 0.7.0 标签锁定的 llama.cpp 提交克隆进包的 llamacpp/ 目录，
-        # 让 hook 走「源码构建」分支（与 build-release.yaml 产出预编译包用的是同一套
-        # CMake 逻辑），在 macOS runner 上就地编译出可用的 llama.framework。
-        # 该提交即 packages/llm_llamacpp/llamacpp 子模块在 0.7.0 标签的锁定 commit。
+      - name: Build llama.framework (iOS simulator) & inject into llm_llamacpp hook
+        # 根因（已确认，非本仓库配置问题）：llm_llamacpp 0.7.0 的 iOS 原生库路径
+        # 完全损坏——其 GitHub Release 的 ios-arm64 预编译包缺失 llama.framework，
+        # 而源码构建分支只产出 libllama.dylib、iOS 收集器却要求 llama.framework 目录，
+        # 两条路在 iOS 上都会失败（android/linux/macos/windows 是单文件，正常）。
+        # 解决办法：在 macOS runner 上用锁定的 llama.cpp 提交（0.7.0 标签子模块指针）
+        # 为 iOS 模拟器 SDK 编译出可用的 llama.framework（+ ggml 依赖 dylib），再用
+        # ci-scripts/patch_llamacpp_hook.py 给 hook 打一个「安全」补丁（仅插入一个
+        # 函数 + 改一处调用，不做括号配对，不会破坏文件），让 hook 优先读取
+        # LLM_LLAMACPP_PREBUILT 目录，从而绕开上游损坏的预编译/源码构建逻辑。
+        # CI 仅为编译校验（flutter build ios --simulator，不上架），故此处用
+        # CPU-only（关闭 Metal）降低 Metal toolchain 在 CI 上的风险；真机/上架所需的
+        # Metal 版本由你在本机/发布流程自行构建。
         env:
           LLAMACPP_COMMIT: "25ae3a9b331fffea50ff8d07a5cad34c33f1276f"
         run: |
-          # 源码构建需要 CMake；macOS runner 通常预装，缺失时再装。
-          if ! command -v cmake >/dev/null 2>&1; then
-            brew install cmake
-          fi
-          cmake --version
-          # 定位 pub 缓存中的 llm_llamacpp 包目录（flutter-action 默认在 ~/ .pub-cache）。
+          set -euo pipefail
+          # 1) 定位包与 llama.cpp 源码
           PKG=$(find "$HOME/.pub-cache" -type d -name 'llm_llamacpp-0.7.0' | head -1)
-          echo "llm_llamacpp package dir: $PKG"
           if [ -z "$PKG" ]; then
             echo "::error::llm_llamacpp package not found in pub cache"
             exit 1
           fi
-          # 若 llamacpp/ 子模块不存在，则按锁定 commit 浅克隆进来（blob 惰性下载，省时）。
-          if [ ! -e "$PKG/llamacpp/CMakeLists.txt" ]; then
-            rm -rf "$PKG/llamacpp"
+          LLAMACPP_SRC="$PKG/llamacpp"
+          if [ ! -e "$LLAMACPP_SRC/CMakeLists.txt" ]; then
+            rm -rf "$LLAMACPP_SRC"
             git clone --filter=blob:none --no-checkout \
-              https://github.com/ggml-org/llama.cpp.git "$PKG/llamacpp"
-            git -C "$PKG/llamacpp" fetch --depth 1 origin "$LLAMACPP_COMMIT"
-            git -C "$PKG/llamacpp" checkout "$LLAMACPP_COMMIT"
-          else
-            echo "llama.cpp source already present, skipping clone"
+              https://github.com/ggml-org/llama.cpp.git "$LLAMACPP_SRC"
+            git -C "$LLAMACPP_SRC" fetch --depth 1 origin "$LLAMACPP_COMMIT"
+            git -C "$LLAMACPP_SRC" checkout "$LLAMACPP_COMMIT"
           fi
-          ls "$PKG/llamacpp" | head
 
-      - name: Patch llm_llamacpp hook (iOS framework lookup)
-        # 根因：上游 llm_llamacpp 0.7.0 的 _findEntityNamed 用 File(...).existsSync()
-        # 之类的方式判定实体存在性，对 iOS 需要的「目录型 framework 包」
-        # (llama.framework 是一个目录) 返回 false，于是：
-        #   (1) 官方 iOS 预编译包（release 0.7.0 的 ios-arm64 产物，确实存在于
-        #       github.com/brynjen/dart-llm/releases，2.77MB）被误判为 unusable；
-        #   (2) 源码构建分支就地编译出的 llama.framework 也收集不到，报
-        #       "Missing native library llama.framework"。
-        # 其它平台（android/linux/macos/windows）需要的都是单个 .so/.dylib/.dll
-        # 文件，所以不受影响——这也解释了 iOS 预编译下载量极少、且没人报修。
-        # 修复：把 _findEntityNamed 替换为「按 basename 递归匹配、文件或目录都算」，
-        # 让 iOS 的 framework 包能被正确找到。对单文件平台无影响；若原函数已正确
-        # 则是等价（无害）替换。随后删掉 hooks_runner 缓存，强制用补丁后的源码重编译。
-        run: |
-          PKG=$(find "$HOME/.pub-cache" -type d -name 'llm_llamacpp-0.7.0' | head -1)
-          if [ -z "$PKG" ]; then
-            echo "::error::llm_llamacpp package not found in pub cache"
+          # 2) 用 CMake 为 iOS 模拟器（arm64）编译 llama.cpp（CPU-only）
+          if ! command -v cmake >/dev/null 2>&1; then brew install cmake; fi
+          BUILD="$RUNNER_TEMP/llama-ios-sim-build"
+          PREBUILT="$RUNNER_TEMP/llama-prebuilt"
+          rm -rf "$BUILD" "$PREBUILT"
+          mkdir -p "$BUILD" "$PREBUILT"
+          cmake -S "$LLAMACPP_SRC" -B "$BUILD" -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphonesimulator \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_COMMON=OFF \
+            -DLLAMA_BUILD_UI=OFF -DLLAMA_CURL=OFF \
+            -DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_ACCELERATE=OFF
+          cmake --build "$BUILD" --config Release
+
+          # 3) 组装 llama.framework + 复制 ggml 依赖 dylib，并修复 install name
+          mkdir -p "$PREBUILT/llama.framework"
+          LIBLLAMA=$(find "$BUILD" -name 'libllama.dylib' | head -1)
+          if [ -z "$LIBLLAMA" ]; then
+            echo "::error::libllama.dylib not produced by CMake build"
             exit 1
           fi
-          BUILD_DART="$PKG/hook/build.dart"
-          python3 - "$BUILD_DART" <<'PY'
-          import sys, re
-          path = sys.argv[1]
-          src = open(path, encoding='utf-8').read()
-          pat = re.compile(r'_findEntityNamed\s*\(([^)]*)\)\s*\{')
-          m = pat.search(src)
-          if not m:
-              print("::warning::_findEntityNamed not found; skipping patch")
-              sys.exit(0)
-          params = m.group(1)
-          names = []
-          for part in params.split(','):
-              part = part.strip()
-              toks = part.split()
-              if toks:
-                  names.append(toks[-1])
-          dir_name = names[0] if len(names) > 0 else 'dir'
-          name_name = names[1] if len(names) > 1 else 'name'
-          # 从函数起始 '{' 起做括号配对，定位函数结束 '}'
-          brace_start = m.end() - 1
-          assert src[brace_start] == '{'
-          depth = 0
-          i = brace_start
-          while i < len(src):
-              if src[i] == '{':
-                  depth += 1
-              elif src[i] == '}':
-                  depth -= 1
-                  if depth == 0:
-                      brace_end = i
-                      break
-              i += 1
-          head = src[m.start():brace_start + 1]
-          new_body = (
-              "{\n"
-              "  // Patched by CI: also match directory-based frameworks (iOS llama.framework).\n"
-              "  if (!%s.existsSync()) return null;\n"
-              "  for (final entity in %s.listSync(recursive: true)) {\n"
-              "    if (p.basename(entity.path) == %s) return entity;\n"
-              "  }\n"
-              "  return null;\n"
-              "}" % (dir_name, dir_name, name_name)
-          )
-          new_src = src[:m.start()] + head + new_body + src[brace_end + 1:]
-          open(path, 'w', encoding='utf-8').write(new_src)
-          print("Patched _findEntityNamed (dir param='%s', name param='%s')" % (dir_name, name_name))
-          PY
-          # 让 hooks runner 用补丁后的源码重新编译（否则会用缓存的 hook.dill）。
+          cp "$LIBLLAMA" "$PREBUILT/llama.framework/llama"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0">' \
+            '<dict>' \
+            '  <key>CFBundleName</key><string>llama</string>' \
+            '  <key>CFBundleIdentifier</key><string>com.lowlevel.llama</string>' \
+            '  <key>CFBundleVersion</key><string>1.0</string>' \
+            '  <key>CFBundlePackageType</key><string>FMWK</string>' \
+            '  <key>CFBundleExecutable</key><string>llama</string>' \
+            '  <key>MinimumOSVersion</key><string>14.0</string>' \
+            '</dict>' \
+            '</plist>' > "$PREBUILT/llama.framework/Info.plist"
+          # 复制 ggml 依赖 dylib（不要复制 libllama，框架内已含）
+          find "$BUILD" -name 'libggml*.dylib' -exec cp {} "$PREBUILT/" \;
+          # 修复 install name：让依赖通过 @rpath 解析，便于 Flutter 嵌入
+          for f in "$PREBUILT"/*.dylib; do
+            base=$(basename "$f")
+            install_name_tool -id "@rpath/$base" "$f" 2>/dev/null || true
+          done
+          install_name_tool -id "@rpath/llama.framework/llama" \
+            "$PREBUILT/llama.framework/llama" 2>/dev/null || true
+          for dep in "$PREBUILT"/*.dylib; do
+            depbase=$(basename "$dep")
+            install_name_tool -change "$LIBLLAMA" "@rpath/$depbase" \
+              "$PREBUILT/llama.framework/llama" 2>/dev/null || true
+            install_name_tool -change "$(dirname "$LIBLLAMA")/$depbase" \
+              "@rpath/$depbase" "$PREBUILT/llama.framework/llama" 2>/dev/null || true
+          done
+          echo "Prebuilt dir:"; ls -la "$PREBUILT"
+          echo "Framework:"; ls -la "$PREBUILT/llama.framework"
+
+          # 4) 安全补丁：让 hook 优先读取 LLM_LLAMACPP_PREBUILT
+          python3 ci-scripts/patch_llamacpp_hook.py "$PKG/hook/build.dart"
+
+          # 5) 把预编译目录暴露给后续 build 步骤，并清掉 hooks 缓存强制重编译
+          echo "LLM_LLAMACPP_PREBUILT=$PREBUILT" >> "$GITHUB_ENV"
           rm -rf .dart_tool/hooks_runner
 
       - name: Flutter doctor (diagnostics)
@@ -306,11 +298,9 @@ jobs:
 
       - name: Build iOS (simulator -> compile verification, no Apple Team needed)
         # 真机/上架需要 Development Team + Provisioning Profile；CI 无 Apple 账号，
-        # 改用模拟器构建做编译校验（不需要签名/Team）。历史运行显示原生代码本身
-        # 已编译成功（"Xcode build done"），仅「可部署包」步骤要求 Team，模拟器构建绕开它。
+        # 改用模拟器构建做编译校验（不需要签名/Team）。上一阶段已自行编译出
+        # llama.framework 并注入，hook 会优先使用（见上方步骤），从而绕开上游损坏逻辑。
         # flutter build ios 内部自动执行 pod install（ios/Podfile 已就位）。
-        # 本步骤触发的 native-assets hook 会就地用上面准备的 llama.cpp 源码构建
-        # iOS 所需的 llama.framework（无 Apple Team 也能完成编译校验）。
         run: flutter build ios --simulator
 
       - name: Upload iOS app artifact (verification only)
