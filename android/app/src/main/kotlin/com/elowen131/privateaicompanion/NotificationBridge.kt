@@ -1,4 +1,4 @@
-package com.example.private_ai_companion
+package com.elowen131.privateaicompanion
 
 import android.Manifest
 import android.app.Activity
@@ -35,7 +35,7 @@ class NotificationBridge(
     companion object {
         const val CHANNEL = "private_ai_companion/notify"
         const val CHANNEL_ID = "companion_reminder"
-        const val ALARM_ACTION = "com.example.private_ai_companion.DAILY_REMINDER"
+        const val ALARM_ACTION = "com.elowen131.privateaicompanion.DAILY_REMINDER"
         const val REQ_DAILY = 3001
 
         fun ensureChannel(context: Context) {

@@ -1,4 +1,4 @@
-package com.example.private_ai_companion
+package com.elowen131.privateaicompanion
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -191,9 +191,9 @@ class CompanionOverlayService : Service() {
     }
 
     companion object {
-        const val ACTION_SHOW = "com.example.private_ai_companion.overlay.SHOW"
-        const val ACTION_UPDATE = "com.example.private_ai_companion.overlay.UPDATE"
-        const val ACTION_HIDE = "com.example.private_ai_companion.overlay.HIDE"
+        const val ACTION_SHOW = "com.elowen131.privateaicompanion.overlay.SHOW"
+        const val ACTION_UPDATE = "com.elowen131.privateaicompanion.overlay.UPDATE"
+        const val ACTION_HIDE = "com.elowen131.privateaicompanion.overlay.HIDE"
 
         const val EXTRA_NAME = "name"
         const val EXTRA_AVATAR = "avatar"

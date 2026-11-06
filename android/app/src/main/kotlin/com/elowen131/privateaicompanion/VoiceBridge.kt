@@ -1,4 +1,4 @@
-package com.example.private_ai_companion
+package com.elowen131.privateaicompanion
 
 import android.Manifest
 import android.app.Activity

@@ -49,7 +49,7 @@
             android:name=".ReminderReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.example.private_ai_companion.DAILY_REMINDER"/>
+                <action android:name="com.elowen131.privateaicompanion.DAILY_REMINDER"/>
             </intent-filter>
         </receiver>
 

@@ -84,9 +84,9 @@
 
 ## 6. 上架前必改清单（prod readiness）
 
-- [ ] **`applicationId` 仍是占位 `com.example.private_ai_companion`**（`android/app/build.gradle.kts`
+- [ ] **`applicationId` 仍是占位 `com.elowen131.privateaicompanion`**（`android/app/build.gradle.kts`
       `namespace` 与 `defaultConfig.applicationId`、`AndroidManifest` 内
-      `com.example.private_ai_companion.DAILY_REMINDER` 等引用）。**Google Play 拒绝 `com.example` 包名**，
+      `com.elowen131.privateaicompanion.DAILY_REMINDER` 等引用）。**Google Play 拒绝 `com.example` 包名**，
       须改为自有反域名（如 `com.yourcompany.companion`）并同步所有 manifest 引用。
 - [ ] 确认 `key.properties` 密码与该 keystore 匹配（见第 4 节）。
 - [ ] 上线前用真实签名做一遍 `flutter build appbundle --release` 并测跑。
