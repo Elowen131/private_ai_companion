@@ -7,7 +7,14 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-    # pub 依赖升级后跑一遍 CI（复用 ci.yml 的 quality job）
+    # 归组：把多个 pub 升级合并为单个 PR，避免面板被大量独立 PR 刷屏。
+    # 注意：major 版本升级（如 get_it 7->9、flutter_secure_storage 9->11、
+    # flutter_lints 3->6、cupertino_icons 1->2）通常带 breaking change，
+    # 不能自动合并——CI 会失败（这是预期的保护），需人工改写调用代码后再合入。
+    groups:
+      pub-dependencies:
+        patterns:
+          - "*"
     commit-message:
       prefix: "deps"
 

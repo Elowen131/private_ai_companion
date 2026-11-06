@@ -21,7 +21,7 @@
 
 ## 2. CI 流水线（`.github/workflows/ci.yml`）
 
-- **触发**：push / PR 到 `main`、`develop`；同 ref 并发自动取消。
+- **触发**：push / PR 到 `main`、`dev`；同 ref 并发自动取消。
 - **Job `quality`**（门禁，必过）：
   1. `actions/checkout` → 装 Java 17 + Flutter 3.47.9（`subosito/flutter-action`，开启 pub 缓存）
   2. `flutter pub get`
@@ -29,10 +29,19 @@
   4. `flutter test`（已清空代理环境变量）
 - **Job `build-android`**（需 quality 通过）：
   1. `android-actions/setup-android` 装 SDK + 接受许可证
-  2. `sdkmanager "ndk;27.0.12077973"`（原生插件需要；若与本地 `flutter.ndkVersion`
-     不符，改为 `flutter doctor` 提示的版本）
+  2. `sdkmanager "ndk;28.2.13676358"`（须与 Flutter 默认 `ndkVersion` 一致；
+     Flutter 3.47.9 默认即此值，见 `FlutterExtension.kt`。**版本不匹配会导致
+     `llm_llamacpp` 等原生插件构建失败**——早期 CI 失败即源于此）
   3. `flutter build apk --release` —— **无签名密钥时自动回退 debug 签名**，仅验证编译链路
-  4. 上传 `app-release.apk` 作为校验产物（`if-no-files-found: ignore`）
+  4. `flutter build appbundle --release` —— 产出 Play Store 上架标准 AAB（同样回退 debug 签名）
+  5. 上传 `app-release.apk` 与 `app-release.aab` 作为校验产物（`if-no-files-found: ignore`）
+- **Job `build-ios`**（需 quality 通过，macOS runner）：
+  1. `subosito/flutter-action` 装 Flutter（开启 pub 缓存）
+  2. 确保 CocoaPods 可用（`brew install cocoapods`，GitHub macOS runner 未必预装）
+  3. `flutter pub get`
+  4. `flutter build ios --release --no-codesign` —— 仅做**编译校验**，不签名；
+     真机/App Store 签名需本地 macOS + Xcode 配置 Development Team（见第 6 节）
+  5. 上传 `Runner.app`（未签名）作为校验产物
 
 > 当前 CI 不产出"可上架"产物（无密钥）。见第 4 节把签名接入 CI。
 
@@ -84,18 +93,21 @@
 
 ## 6. 上架前必改清单（prod readiness）
 
-- [ ] **`applicationId` 仍是占位 `com.elowen131.privateaicompanion`**（`android/app/build.gradle.kts`
-      `namespace` 与 `defaultConfig.applicationId`、`AndroidManifest` 内
-      `com.elowen131.privateaicompanion.DAILY_REMINDER` 等引用）。**Google Play 拒绝 `com.example` 包名**，
-      须改为自有反域名（如 `com.yourcompany.companion`）并同步所有 manifest 引用。
+- [x] **应用标识已统一为 `com.elowen131.privateaicompanion`**（Android `applicationId`/`namespace`、
+      Kotlin 包目录、`AndroidManifest` 的 `DAILY_REMINDER` action 已同步；iOS Bundle ID 已对齐为
+      同一字符串）。Google Play / App Store 均不再使用占位 `com.example`。
+- [x] **iOS 工程已生成**（`flutter create --platforms=ios .`），CI 已加 `build-ios` 编译校验任务。
+- [x] **本地数据库已 SQLCipher 整库加密**，密钥落系统安全存储；`PRIVACY.md` 与设置页「本地加密」说明已就绪。
+- [ ] **iOS 真机/App Store 签名**：在本地 macOS + Xcode 打开 `ios/Runner.xcworkspace`，
+      给 `Runner` 与 `RunnerTests` 两个 target 设置 **Development Team**（Signing & Capabilities）。
+      CI 的 `--no-codesign` 仅验证编译，不签名；上架需导出 Distribution Cert + Provisioning Profile。
+- [ ] **iOS 隐私描述**已补齐：麦克风 / 相机 / 相册（拍照与保存）四项 `UsageDescription`，
+      覆盖 `image_picker` 与语音功能，避免 iOS 调用时崩溃。
 - [ ] 确认 `key.properties` 密码与该 keystore 匹配（见第 4 节）。
-- [ ] 上线前用真实签名做一遍 `flutter build appbundle --release` 并测跑。
+- [ ] 上线前用真实签名做一遍 `flutter build appbundle --release`（Android）与
+      `flutter build ios --release`（iOS，需签名）并测跑。
 - [ ] （可选）`networkSecurityConfig`：当前默认禁止明文流量（安全）；若需允许特定本地/调试
       端点明文，单独配置而非全局放开。
-- [ ] **iOS 尚未生成**（`ios/` 不存在）。如需 iOS，先
-      `flutter create . --platforms=ios`，再补 iOS CI 与签名（Cert/Provisioning Profile）。
-- [ ] 隐私：本地存储含个人对话与生物/形象数据，建议在隐私政策中说明，并考虑应用内加密
-      （当前为明文 SQLite）。
 
 ---
 
