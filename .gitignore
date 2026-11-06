@@ -1,0 +1,109 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Widget Preview related
+.widget_preview/
+
+# ---------------------------------------------------------------------------
+# Secrets & signing —— 生产签名密钥与明文密码【绝不入库】
+# 当前仓库已存在 android/app/keystore/release.keystore 与 android/key.properties，
+# 二者含生产签名证书与明文密码。一旦误提交即等同于密钥泄露，必须忽略。
+# 规范：密钥只存本机 + CI Secret / 密钥库，不要把密钥放进源码仓库。
+# ---------------------------------------------------------------------------
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+key.properties
+android/key.properties
+android/**/key.properties
+/android/app/keystore/
+android/app/keystore/**
+android/upload-keystore.jks
+upload-keystore.jks
+
+# 本地环境配置（可能含 token / 路径）
+.env
+.env.*
+*.env
+local.properties
+android/local.properties
+
+# Firebase / 第三方密钥配置文件
+google-services.json
+GoogleService-Info.plist
+firebase.json
+
+# ---------------------------------------------------------------------------
+# Android 额外标准条目
+# ---------------------------------------------------------------------------
+/android/.gradle/
+/android/captures/
+*.apk
+*.aab
+/android/app/flutter_lib/
+
+# ---------------------------------------------------------------------------
+# iOS / macOS / Windows / Linux / Web 标准条目（当前未生成 iOS，提前覆盖）
+# ---------------------------------------------------------------------------
+/ios/Flutter/Flutter.framework/
+/ios/Flutter/Flutter.podspec
+/ios/Flutter/Generated.xcconfig
+/ios/Flutter/ephemeral/
+/ios/Pods/
+/ios/.symlinks/
+/ios/Runner/GeneratedPluginRegistrant.*
+**/ios/Runner/GeneratedPluginRegistrant.*
+**/ios/*.mode
+**/ios/ExportOptions.plist
+/macos/Pods/
+/macos/.symlinks/
+/macos/Flutter/GeneratedPluginRegistrant.*
+/windows/flutter/generated_plugin_registrant.*
+/linux/flutter/generated_plugin_registrant.*
+web/icons/Icon-*.png
+.web/

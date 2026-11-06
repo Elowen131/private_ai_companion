@@ -1,0 +1,28 @@
+{
+  "schema": 2,
+  "personaFingerprint": "db39480c445aa9a0adc37af0cbc04016b63e346e02f686de1024b0bbb34b00b8",
+  "personaName": "岑攸珩",
+  "portrait": "assets/models/cen_youheng_portrait.jpg",
+  "modelPreview": "assets/models/cen_youheng_3d_preview.png",
+  "modelGlb": "cen_youheng_3d.glb",
+  "modelNote": "完整 50MB GLB 与 PBR OBJ 作为独立素材交付，不打进 APK；可在 App 内按路径导入。",
+  "derivedFrom": [
+    "name",
+    "gender",
+    "age",
+    "identity",
+    "personality",
+    "speakStyle",
+    "likes",
+    "dislikes",
+    "background",
+    "worldSetting",
+    "relationBase",
+    "taboos"
+  ],
+  "style": "cute-chibi",
+  "qPortrait": "assets/models/cen_youheng_q_portrait.jpg",
+  "qModelPreview": "assets/models/cen_youheng_q_3d_preview.png",
+  "qModelGlb": "cen_youheng_q_version.glb",
+  "appGeneratedModel": "由 PersonaVisualSpec + ChibiBuilder + GlbCodec 在 App 内实时生成，含 22 骨骼与烘焙动画，输出 avatar_models/chibi_<fingerprint前12>.glb"
+}
