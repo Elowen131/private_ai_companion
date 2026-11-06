@@ -4,8 +4,10 @@ publish_to: 'none'
 version: 0.1.0+1
 
 environment:
-  sdk: '>=3.6.0 <4.0.0'
-  flutter: ">=3.19.0"
+  # llamadart 0.17.5 的硬性要求：Dart >= 3.10.7、Flutter >= 3.38.0（iOS 部署目标 16.4+）。
+  # 本地与 CI 均使用 Flutter 3.47.9，满足；提高下限避免在不达标的环境误装。
+  sdk: '>=3.10.7 <4.0.0'
+  flutter: ">=3.38.0"
 
 dependencies:
   flutter:
