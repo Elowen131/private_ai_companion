@@ -30,7 +30,7 @@ dependencies:
   sqflite_common_ffi: ^2.3.3   # 桌面开发期可用 FFI（测试夹具中按需使用）
 
   # 数据库加密密钥存储：落到系统安全存储（Android Keystore / iOS Keychain / 桌面 DPAPI）
-  flutter_secure_storage: ^9.0.0
+  flutter_secure_storage: ^11.2.0
 
   # 工具
   uuid: ^4.3.3
