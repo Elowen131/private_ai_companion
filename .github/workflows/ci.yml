@@ -60,12 +60,18 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      - name: Install system SQLite (FFI backend on Linux)
+        # sqflite_common_ffi 的 FFI 后端在 Linux 上需要 libsqlite3；ubuntu runner 默认
+        # 可能缺失，缺失会导致数据库测试在 CI 上 MissingPlugin/加载失败。
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
       - name: Analyze (treat warnings as errors)
         run: flutter analyze --fatal-infos
 
       - name: Test
-        # 测试套件约 300+ 项；数据库相关用例通过 sqflite_common_ffi 跑真 SQLite，
-        # 不依赖 Android/iOS 原生插件。禁止代理以规避沙箱网络拦截。
+        # 测试套件约 300+ 项；flutter_test_config.dart 已全局把 databaseFactory 切到
+        # FFI 真 SQLite，不依赖 Android/iOS 原生加密插件（Linux CI 无该原生实现）。
+        # 禁止代理以规避沙箱网络拦截。
         run: flutter test
         env:
           HTTP_PROXY: ""
