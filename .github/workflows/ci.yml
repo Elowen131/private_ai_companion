@@ -134,13 +134,14 @@ jobs:
       - name: Free up disk space (avoid "Could not update last-build.bin" on the 14GB runner)
         # GitHub ubuntu-latest runner 仅 ~14GB 磁盘；llamadart 通过 NDK 编译 llama.cpp
         # 原生库会产生大量中间产物，加上预装的 dotnet / CodeQL 等占用，易把盘写满，
-        # 导致 Gradle 末尾写缓存文件失败。移除与 Android 构建无关的预装大目录后，
-        # 再让 flutter / gradle 自行清理。
+        # 导致 Gradle 末尾写缓存文件失败。
+        # ！！重要：/opt/hostedtoolcache（即 $AGENT_TOOLSDIRECTORY）里装着 Flutter SDK 与
+        # JDK，绝不能删——上一步曾误删整个 toolcache 导致 flutter: command not found。
+        # 这里只删与 Android 构建无关的预装大目录：dotnet 与 CodeQL 子目录。
         run: |
           df -h
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/hostedtoolcache/CodeQL
-          if [ -n "${AGENT_TOOLSDIRECTORY:-}" ]; then sudo rm -rf "$AGENT_TOOLSDIRECTORY"; fi
           df -h
 
       - name: Pub get
