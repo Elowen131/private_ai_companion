@@ -57,13 +57,22 @@ jobs:
       - name: Print versions
         run: flutter --version
 
+      - name: Flutter doctor (diagnostics)
+        run: flutter doctor -v
+
       - name: Pub get
         run: flutter pub get
 
-      - name: Install system SQLite (FFI backend on Linux)
-        # sqflite_common_ffi 的 FFI 后端在 Linux 上需要 libsqlite3；ubuntu runner 默认
-        # 可能缺失，缺失会导致数据库测试在 CI 上 MissingPlugin/加载失败。
-        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: Install system deps (FFI SQLite + Flutter Linux test runtime)
+        # 1) libsqlite3-dev：sqflite_common_ffi 的 FFI 后端在 Linux 上需要 libsqlite3。
+        # 2) GTK / GL / NSS 等：flutter test 在 Linux 上跑 widget / UI 测试需要 GTK-3、
+        #    OpenGL、NSS 等图形运行时；ubuntu runner 默认缺失会导致 UI 测试在 CI 上
+        #    渲染阶段崩溃（本地 Windows / macOS 因自带图形栈而能过）。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libsqlite3-dev \
+            libgtk-3-0 libgl1 libnss3 libxss1 libgbm1 libjsoncpp-dev
 
       - name: Analyze (treat warnings as errors)
         run: flutter analyze --fatal-infos
@@ -170,15 +179,23 @@ jobs:
           fi
           pod --version
 
+      - name: Enable iOS build target
+        # macOS runner 上需显式开启 iOS 构建支持，否则 flutter build ios 直接报错。
+        run: flutter config --enable-ios
+
+      - name: Accept Xcode license
+        # 未授权的 Xcode 会让 xcodebuild / flutter build ios 失败；CI 上必须主动接受。
+        run: sudo xcodebuild -license accept
+
       - name: Pub get
         run: flutter pub get
 
-      - name: Install CocoaPods dependencies
-        # ios/Podfile 已就位；首次 pod install 需在 macOS runner 上拉取 spec 仓库，
-        # 这里显式执行以确保 sqflite_sqlcipher 等原生 pod 接入工程。
-        run: cd ios && pod install
+      - name: Flutter doctor (diagnostics)
+        run: flutter doctor -v
 
       - name: Build iOS (no code signing -> compile verification only)
+        # flutter build ios 内部会自动执行 pod install（ios/Podfile 已就位），
+        # 将 sqflite_sqlcipher 等原生 pod 接入工程；--no-codesign 仅做编译校验。
         run: flutter build ios --release --no-codesign
 
       - name: Upload iOS app artifact (verification only)
