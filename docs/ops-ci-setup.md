@@ -97,17 +97,21 @@
       Kotlin 包目录、`AndroidManifest` 的 `DAILY_REMINDER` action 已同步；iOS Bundle ID 已对齐为
       同一字符串）。Google Play / App Store 均不再使用占位 `com.example`。
 - [x] **iOS 工程已生成**（`flutter create --platforms=ios .`），CI 已加 `build-ios` 编译校验任务。
-- [x] **iOS 原生库（llm_llamacpp 0.7.0）在 CI 自行编译并注入 `llama.framework`**：该包 0.7.0 的 iOS
-      路径**完全损坏**——GitHub Release 的 `ios-arm64` 预编译包缺失 `llama.framework`，而源码构建分支
-      只产出 `libllama.dylib`（iOS 收集器却要求 `llama.framework` 目录），两条路在 iOS 上都会失败
+- [x] **iOS 原生库（llm_llamacpp 0.7.0）在 CI 自行编译并「预编译缓存注入」`llama.framework`**：该包 0.7.0
+      的 iOS 路径**完全损坏**——GitHub Release 的 `ios-arm64` 预编译包缺失 `llama.framework`，而源码构建
+      分支只产出 `libllama.dylib`（iOS 收集器却要求 `llama.framework` 目录），两条路在 iOS 上都会失败
       （android/linux/macos/windows 是单文件，正常）。CI 的 `build-ios` 在 `flutter pub get` 之后：
       (1) 用上游锁定的 llama.cpp 提交 `25ae3a9b331fffea50ff8d07a5cad34c33f1276f` 克隆进
       `~/.pub-cache/.../llm_llamacpp-0.7.0/llamacpp/`；(2) 用 CMake 为 iOS **模拟器**(arm64) 编译
       llama.cpp（CPU-only，关闭 Metal 以降 CI 风险），组装出 `llama.framework` + ggml 依赖 dylib 并修复
-      rpath；(3) 通过 `ci-scripts/patch_llamacpp_hook.py`（安全补丁：仅插入一个函数 + 改一处调用，不做
-      括号配对，不会破坏文件）让 hook 优先读取 `LLM_LLAMACPP_PREBUILT` 目录，绕开上游损坏逻辑。
+      rpath；(3) **把该 `llama.framework` 直接注入到 hook 的预编译缓存目录**
+      `.dart_tool/hooks_runner/shared/llm_llamacpp/build/.cache/v0.7.0-abi*-ios-arm64/`，让上游 hook
+      在 `_tryDownloadPrebuilt` 里命中该缓存、跳过其损坏的下载/源码构建逻辑（比直接改第三方 hook 源码更稳
+      定——补丁方式已验证在 CI 上不可靠，第三方文件不可见且 recompile 行为不可控）。
       `build-ios` 超时已调到 90 分钟。CI 仅为编译校验（`flutter build ios --simulator`），真机/上架的
       Metal 版本请在本机/发布流程自行构建。
+- [x] **已弃用 `ci-scripts/patch_llamacpp_hook.py`**：经验证，直接修改 `llm_llamacpp` 的 `hook/build.dart`
+      在 CI 上不可靠（stack trace 显示仍是未打补丁的原始 hook 在跑），故改为上述「缓存注入」方案，并删除该脚本。
 - [x] **本地数据库已 SQLCipher 整库加密**，密钥落系统安全存储；`PRIVACY.md` 与设置页「本地加密」说明已就绪。
 - [ ] **iOS 真机/App Store 签名**：在本地 macOS + Xcode 打开 `ios/Runner.xcworkspace`，
       给 `Runner` 与 `RunnerTests` 两个 target 设置 **Development Team**（Signing & Capabilities）。
