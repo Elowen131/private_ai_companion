@@ -6,6 +6,10 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<!-- 语音消息 / 语音转文字需要麦克风权限；缺少此描述会在 iOS 请求麦克风时崩溃。
+	     文案可按实际上架语言调整。 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音消息与语音转文字，录音仅在本地处理</string>
 	<key>CFBundleDisplayName</key>
 	<string>Private Ai Companion</string>
 	<key>CFBundleExecutable</key>
