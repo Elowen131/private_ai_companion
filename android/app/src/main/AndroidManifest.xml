@@ -10,10 +10,12 @@
     <!-- 语音识别优先走设备离线包：声明后系统才会把离线识别能力暴露出来。 -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- 设备凭证兜底解锁（系统 PIN / 图案 / 指纹 / 人脸），无需额外权限。 -->
-    <application
-        android:label="private_ai_companion"
-        android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        <application
+            android:label="private_ai_companion"
+            android:name="${applicationName}"
+            android:icon="@mipmap/ic_launcher"
+            android:allowBackup="false"
+            android:fullBackupContent="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

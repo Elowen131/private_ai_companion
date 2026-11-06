@@ -1,0 +1,116 @@
+# 持续集成 / 持续交付流水线
+# 触发：推送到 main / develop、以及针对这两分支的 PR。
+# 目标：无人值守校验「代码质量 → 测试 → 生产构建可编译」。
+#
+# 注意：
+#  - 生产签名密钥（android/app/keystore/release.keystore、android/key.properties）
+#    已被 .gitignore 忽略，不会进入仓库，也不会注入到本 CI。无密钥时 release 构建
+#    会自动回退到 debug 签名（仅用于「能否编译」的验证，不可上架）。
+#  - 如需在 CI 产出可上架产物，请用仓库 Secrets 注入签名（见 docs/ops-ci-setup.md）。
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: "3.47.9"   # 与本地开发环境保持一致；升级 Flutter 时同步此处
+  JAVA_VERSION: "17"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 质量门禁：静态分析 + 单元测试
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+          cache-key: "flutter-${{ env.FLUTTER_VERSION }}-pub-${{ hashFiles('**/pubspec.lock') }}"
+
+      - name: Print versions
+        run: flutter --version
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Analyze (treat warnings as errors)
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        # 测试套件 308 项；禁止代理以规避沙箱网络拦截。
+        run: flutter test
+        env:
+          HTTP_PROXY: ""
+          HTTPS_PROXY: ""
+          http_proxy: ""
+          https_proxy: ""
+
+  # ---------------------------------------------------------------------------
+  # 2) 生产构建可编译性校验（Android）
+  #    无签名密钥时回退 debug 签名，仅验证 release 构建链路能跑通。
+  # ---------------------------------------------------------------------------
+  build-android:
+    name: Build Android (release, verify compile)
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+          cache-key: "flutter-${{ env.FLUTTER_VERSION }}-pub-${{ hashFiles('**/pubspec.lock') }}"
+
+      - name: Setup Android SDK & accept licenses
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK (llm_llamacpp 等原生插件需要)
+        # 若与本地 flutter.ndkVersion 不符，请改为本地 `flutter doctor` 提示的版本。
+        run: sdkmanager "ndk;27.0.12077973"
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build release APK (no signing -> debug-sign fallback)
+        run: flutter build apk --release
+
+      - name: Upload APK artifact (verification only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-unsigned
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: ignore

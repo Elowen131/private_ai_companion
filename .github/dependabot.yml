@@ -1,0 +1,20 @@
+# Dependabot：定期扫描依赖与 GitHub Actions，自动发起升级 PR。
+version: 2
+
+updates:
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    # pub 依赖升级后跑一遍 CI（复用 ci.yml 的 quality job）
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: "github-actions"
+    directory: "/.github"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"

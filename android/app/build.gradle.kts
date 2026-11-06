@@ -63,8 +63,15 @@ android {
                 signingConfigs.getByName("debug")
             }
             isDebuggable = false
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // 生产加固：开启 R8 代码混淆 + 资源压缩，缩小体积、提升逆向门槛。
+            // 规则见 android/app/proguard-rules.pro；如需排查混淆导致的崩溃，
+            // 可临时加 -printmapping 或在 CI 产物里取 app-release-mapping.txt。
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
