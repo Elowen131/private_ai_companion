@@ -65,7 +65,7 @@ class AppRouter {
       chat,
       arguments: <String, dynamic>{
         'personaId': personaId,
-        if (conversationId != null) 'conversationId': conversationId,
+        'conversationId': ?conversationId,
         'dailyMode': dailyMode,
       },
     );
@@ -77,7 +77,7 @@ class AppRouter {
   }) {
     return Navigator.of(context).pushNamed<T>(
       roleCreate,
-      arguments: <String, dynamic>{if (persona != null) 'persona': persona},
+      arguments: <String, dynamic>{'persona': ?persona},
     );
   }
 
@@ -93,7 +93,7 @@ class AppRouter {
       chat,
       arguments: <String, dynamic>{
         'personaId': personaId,
-        if (conversationId != null) 'conversationId': conversationId,
+        'conversationId': ?conversationId,
         'dailyMode': dailyMode,
       },
     );

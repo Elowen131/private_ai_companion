@@ -162,7 +162,7 @@ void main() {
       home: Scaffold(
         body: AppearanceSheet(
           persona: _p,
-          onSave: (_, __) async {},
+          onSave: (_, _) async {},
         ),
       ),
     ));

@@ -208,7 +208,7 @@ class _DesktopPageState extends State<DesktopPage> {
                     width: 52,
                     height: 70,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
+                    errorBuilder: (_, _, _) => Container(
                       width: 52,
                       height: 70,
                       color: cs.surfaceContainerHighest,

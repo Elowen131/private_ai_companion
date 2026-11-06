@@ -167,7 +167,7 @@ class _Avatar3DViewState extends State<Avatar3DView>
           : null,
       child: AnimatedBuilder(
         animation: _ctrl,
-        builder: (_, __) {
+        builder: (_, _) {
           final t = widget.animate ? _ctrl.value * 1000 : 0.0;
           final actionAge = DateTime.now().difference(_actionAt).inMilliseconds / 1000;
           final pose = _animator.pose(

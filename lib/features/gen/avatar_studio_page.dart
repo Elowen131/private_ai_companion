@@ -552,7 +552,7 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemCount: AvatarWardrobe.values.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 6),
+                  separatorBuilder: (_, _) => const SizedBox(width: 6),
                   itemBuilder: (_, i) {
                     final w = AvatarWardrobe.values[i];
                     return ChoiceChip(

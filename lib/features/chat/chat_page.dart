@@ -190,7 +190,7 @@ class _ChatPageState extends State<ChatPage> {
   /// 因此没调过这项的用户，提示词与之前逐字一致。
   String? get _extraSystem {
     final parts = <String>[
-      if (_modeSystem != null) _modeSystem!,
+      ?_modeSystem,
       if (_settings.toneClause.isNotEmpty) _settings.toneClause,
     ];
     return parts.isEmpty ? null : parts.join('\n');

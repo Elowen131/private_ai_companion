@@ -329,7 +329,7 @@ class ModelDownloader {
         (r) async {
           await _drain(r.stream);
         },
-        onError: (Object _, StackTrace __) {},
+        onError: (Object _, StackTrace _) {},
       ));
       rethrow;
     }

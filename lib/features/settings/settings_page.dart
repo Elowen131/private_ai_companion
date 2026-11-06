@@ -365,7 +365,7 @@ class _LanguageTile extends StatelessWidget {
     final ctl = getIt<AppLocaleController>();
     return ValueListenableBuilder<String>(
       valueListenable: ctl,
-      builder: (_, value, __) => ListTile(
+      builder: (_, value, _) => ListTile(
         leading: const Icon(Icons.translate_outlined),
         title: const Text('语言 / Language'),
         subtitle: Text(ctl.label),

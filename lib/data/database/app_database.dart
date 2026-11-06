@@ -52,7 +52,7 @@ class AppDatabase {
     _opening = future;
     unawaited(future.then<void>(
       (_) {},
-      onError: (Object _, StackTrace __) => _opening = null,
+      onError: (Object _, StackTrace _) => _opening = null,
     ));
     return future;
   }
@@ -81,7 +81,7 @@ class AppDatabase {
     _warmUp = future;
     unawaited(future.then<void>(
       (_) {},
-      onError: (Object _, StackTrace __) => _warmUp = null,
+      onError: (Object _, StackTrace _) => _warmUp = null,
     ));
     return future;
   }

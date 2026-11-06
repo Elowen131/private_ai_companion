@@ -110,7 +110,7 @@ class MessageRepository {
             conversationId == null ? '' : 'AND m.conversation_id = ?';
         final args = <Object?>[
           match,
-          if (conversationId != null) conversationId,
+          ?conversationId,
           limit,
         ];
         final rows = await c.rawQuery(
@@ -138,7 +138,7 @@ class MessageRepository {
             r"(content LIKE ? ESCAPE '\' OR action_text LIKE ? ESCAPE '\' "
             r"OR spoken_text LIKE ? ESCAPE '\')",
         whereArgs: [
-          if (conversationId != null) conversationId,
+          ?conversationId,
           like,
           like,
           like,

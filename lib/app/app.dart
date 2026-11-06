@@ -34,9 +34,9 @@ class MyApp extends StatelessWidget {
 
     return AnimatedBuilder(
       animation: settings,
-      builder: (_, __) => ValueListenableBuilder<String>(
+      builder: (_, _) => ValueListenableBuilder<String>(
         valueListenable: localeCtl,
-        builder: (_, value, __) => MaterialApp(
+        builder: (_, value, _) => MaterialApp(
           title: '私人 AI 陪伴',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light(),

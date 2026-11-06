@@ -100,7 +100,7 @@ Uint8List encodeGlb(
       'buffer': 0,
       'byteOffset': offset,
       'byteLength': byteLength,
-      if (target != null) 'target': target,
+      'target': ?target,
     });
     return idx;
   }
@@ -120,8 +120,8 @@ Uint8List encodeGlb(
       'componentType': componentType,
       'count': count,
       'type': type,
-      if (min != null) 'min': min,
-      if (max != null) 'max': max,
+      'min': ?min,
+      'max': ?max,
     });
     return idx;
   }

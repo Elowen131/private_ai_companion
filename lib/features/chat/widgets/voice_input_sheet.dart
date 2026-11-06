@@ -499,7 +499,7 @@ class _WaveState extends State<_Wave> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _c,
-      builder: (_, __) => SizedBox(
+      builder: (_, _) => SizedBox(
         height: 34,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,

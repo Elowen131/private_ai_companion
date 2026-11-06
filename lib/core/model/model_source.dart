@@ -172,7 +172,7 @@ class ModelSourceStore {
         final payload = jsonEncode(_userSources.map((s) => s.toJson()).toList());
         await writeAtomic(File(_sourcesFile()), payload);
       },
-      onError: (Object _, StackTrace __) {},
+      onError: (Object _, StackTrace _) {},
     );
     return _saveChain;
   }
