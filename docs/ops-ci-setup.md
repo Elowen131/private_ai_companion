@@ -97,6 +97,12 @@
       Kotlin 包目录、`AndroidManifest` 的 `DAILY_REMINDER` action 已同步；iOS Bundle ID 已对齐为
       同一字符串）。Google Play / App Store 均不再使用占位 `com.example`。
 - [x] **iOS 工程已生成**（`flutter create --platforms=ios .`），CI 已加 `build-ios` 编译校验任务。
+- [x] **iOS 原生库（llm_llamacpp）在 CI 走「源码构建」**：上游 `llm_llamacpp` 0.7.0 的 iOS 预编译包
+      （release 0.7.0 的 `ios-arm64`）损坏——解压后缺失 `llama.framework`，而 pub.dev 发布的包又不
+      含 `llamacpp/` 子模块，导致预编译、源码两条路在 CI 都失败。CI 的 `build-ios` 在 `flutter pub get`
+      之后把上游锁定的 llama.cpp 提交 `25ae3a9b331fffea50ff8d07a5cad34c33f1276f` 浅克隆进
+      `~/.pub-cache/.../llm_llamacpp-0.7.0/llamacpp/`，并装好 CMake，让 hook 就地编译出
+      `llama.framework`（与上游产出预编译包同一套 CMake 逻辑）。`build-ios` 超时已调到 90 分钟。
 - [x] **本地数据库已 SQLCipher 整库加密**，密钥落系统安全存储；`PRIVACY.md` 与设置页「本地加密」说明已就绪。
 - [ ] **iOS 真机/App Store 签名**：在本地 macOS + Xcode 打开 `ios/Runner.xcworkspace`，
       给 `Runner` 与 `RunnerTests` 两个 target 设置 **Development Team**（Signing & Capabilities）。
