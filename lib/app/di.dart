@@ -22,6 +22,8 @@ import 'package:private_ai_companion/core/time/world_clock.dart';
 import 'package:private_ai_companion/core/world/world_event_service.dart';
 import 'package:private_ai_companion/core/time/age_service.dart';
 import 'package:private_ai_companion/core/security/profile_lock_service.dart';
+import 'package:private_ai_companion/core/security/db_cipher_key.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:private_ai_companion/core/diary/diary_service.dart';
 import 'package:private_ai_companion/core/plot/plot_edit_service.dart';
 import 'package:private_ai_companion/core/bond/bond_service.dart';
@@ -75,7 +77,11 @@ Future<void> setupDependencies() async {
   // 不在启动路径上等待数据库打开：首次升级大库时迁移可能耗时数秒，
   // 阻塞 runApp 会直接卡在启动闪屏甚至 ANR。连接在首个查询时惰性建立，
   // FTS 探测与内容播种由 AppShell 在首帧之后调用 warmUp() 渐进完成。
-  final AppDatabase db = AppDatabase();
+  // 数据库加密密钥存系统安全存储（Keystore/Keychain/桌面 DPAPI），保证
+  // 本地 SQLite 在设备被窃取/root 后仍为密文，不落明文。
+  final AppDatabase db = AppDatabase(
+    keyProvider: const SecureCipherKeyProvider(FlutterSecureStorage()),
+  );
   getIt.registerSingleton<AppDatabase>(db);
 
   // 应用私有目录（模型落盘 / 状态持久化）

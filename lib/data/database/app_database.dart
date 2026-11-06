@@ -3,12 +3,25 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
-import 'package:sqflite/sqflite.dart';
+// 使用全局「可设置」的 databaseFactory（测试夹具可替换为 FFI；生产由 cipher 原生插件
+// 注册为全局），而非 sqflite_sqlcipher 自带的只读 getter —— 后者会绕过测试夹具、在
+// flutter test 下因缺少原生插件而 MissingPluginException。密码通过
+// SqlCipherOpenDatabaseOptions 透传，仅当全局工厂为 cipher 原生时生效（整库页级加密），
+// 测试用 FFI 时该字段被忽略，行为退化为明文，保证测试可跑且逻辑一致。
+import 'package:sqflite_common/sqflite.dart';
+import 'package:sqflite_sqlcipher/sqlite_api.dart'
+    show SqlCipherOpenDatabaseOptions;
+
+import 'package:private_ai_companion/core/security/db_cipher_key.dart';
 
 import 'migrations.dart';
 import 'schema.dart';
 
-export 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
+export 'package:sqflite_common/sqlite_api.dart' show ConflictAlgorithm;
+
+/// 未显式传入密钥时的默认密钥（仅用于不实际打开数据库的桩 / 测试）。
+/// 生产环境由 di.dart 注入 [SecureCipherKeyProvider]，不会落到此值。
+const String _kDefaultTestKey = 'test-cipher-key-do-not-use-in-prod';
 
 /// 本地数据库封装（sqflite，单库单文件，全部数据仅本机可见）。
 ///
@@ -21,11 +34,16 @@ class AppDatabase {
   Future<Database>? _opening;
   Future<void>? _warmUp;
   final Future<String> Function()? _pathResolver;
+  final CipherKeyProvider _keyProvider;
 
   /// [pathResolver] 仅供集成测试注入 `:memory:` / 临时文件路径；
   /// 生产使用默认的 `getDatabasesPath()/companion.db`。
-  AppDatabase({Future<String> Function()? pathResolver})
-      : _pathResolver = pathResolver;
+  /// [keyProvider] 提供 SQLCipher 加密密钥；生产用安全存储，测试用固定密钥。
+  AppDatabase({
+    Future<String> Function()? pathResolver,
+    CipherKeyProvider? keyProvider,
+  })  : _pathResolver = pathResolver,
+        _keyProvider = keyProvider ?? const StaticCipherKeyProvider(_kDefaultTestKey);
 
   Future<Database> get database {
     final pending = _opening;
@@ -46,7 +64,7 @@ class AppDatabase {
   }
 
   Future<String> _resolvePath() async =>
-      _pathResolver != null ? _pathResolver() : p.join(await getDatabasesPath(), 'companion.db');
+      _pathResolver != null ? _pathResolver() : p.join(await databaseFactory.getDatabasesPath(), 'companion.db');
 
   /// 打开后的运行时维护（FTS 能力探测 + 内置内容播种）。
   ///
@@ -84,8 +102,31 @@ class AppDatabase {
 
   Future<Database> _open() async {
     final path = await _resolvePath();
-    final db = await openDatabase(
-      path,
+    final password = await _keyProvider.getKey();
+    try {
+      return await _openWith(path, password);
+    } on DatabaseException catch (e) {
+      // 旧版明文库无法用密钥直接打开（SQLCipher 报 file is not a database /
+      // file is encrypted）。升级前的明文库需重建为加密库：删除后重试一次。
+      // 仅对文件库生效，:memory: 不会命中此分支。
+      final msg = e.toString();
+      if (!path.startsWith(':memory:') &&
+          (msg.contains('not a database') ||
+              msg.contains('file is encrypted') ||
+              msg.contains('encrypted'))) {
+        try {
+          await databaseFactory.deleteDatabase(path);
+        } catch (_) {
+          // 删除失败也继续，下方 open 会因缺文件而重建。
+        }
+        return await _openWith(path, password);
+      }
+      rethrow;
+    }
+  }
+
+  Future<Database> _openWith(String path, String password) async {
+    final options = SqlCipherOpenDatabaseOptions(
       version: dbVersion,
       onConfigure: (db) async {
         // 新表全部使用真实 FOREIGN KEY；旧表靠应用层约束，不受此开关影响。
@@ -118,8 +159,9 @@ class AppDatabase {
         // 只做连接级 PRAGMA：onOpen 回调内不得开启事务。
         await _tune(db);
       },
+      password: password,
     );
-    return db;
+    return await databaseFactory.openDatabase(path, options: options);
   }
 
   Future<void> _tune(Database db) async {

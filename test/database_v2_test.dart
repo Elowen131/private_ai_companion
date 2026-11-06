@@ -2,7 +2,7 @@
 // 锁定迁移安全、约束、索引、FTS 降级、分页、事务化清空五类契约。
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import 'package:private_ai_companion/core/models/message.dart';
 import 'package:private_ai_companion/data/database/app_database.dart';

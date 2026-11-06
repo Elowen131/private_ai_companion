@@ -1,4 +1,4 @@
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import 'package:private_ai_companion/core/voice/voice_models.dart';
 import 'package:private_ai_companion/data/database/app_database.dart';

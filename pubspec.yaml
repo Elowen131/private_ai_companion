@@ -22,9 +22,15 @@ dependencies:
   path_provider: ^2.1.2
   path: ^1.8.3
 
-  # 本地数据库（原生 SQL，避免 build_runner 代码生成依赖）
-  sqflite: ^2.3.2
-  sqflite_common_ffi: ^2.3.3   # 桌面开发期可用 FFI
+  # 本地数据库（SQLCipher 透明加密：原生 SQL + 静态加密，避免 build_runner 代码生成依赖）
+  # sqflite_sqlcipher 与 sqflite API 兼容，仅 openDatabase 多一个 password 参数；
+  # 加密在页级进行，不影响 LIKE 检索等现有查询语义。
+  sqflite_sqlcipher: ^3.4.1
+  sqflite_common: ^2.5.0   # 直接依赖：使用可设置的全局 databaseFactory（测试夹具替换为 FFI）
+  sqflite_common_ffi: ^2.3.3   # 桌面开发期可用 FFI（测试夹具中按需使用）
+
+  # 数据库加密密钥存储：落到系统安全存储（Android Keystore / iOS Keychain / 桌面 DPAPI）
+  flutter_secure_storage: ^9.0.0
 
   # 工具
   uuid: ^4.3.3

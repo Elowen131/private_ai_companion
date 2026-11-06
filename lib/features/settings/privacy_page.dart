@@ -68,6 +68,31 @@ class PrivacyPage extends StatelessWidget {
           ),
           SizedBox(height: 18),
           ChSectionHeader(
+            title: '本地加密',
+            caption: '数据在本机以密文存储，不只是「不联网」。',
+          ),
+          ChPanel(
+            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            children: [
+              ChRow(
+                leading: ChIconBadge(icon: Icons.enhanced_encryption),
+                title: '数据库静态加密',
+                subtitle: '本地 SQLite 整库经 SQLCipher 加密，密钥存系统安全存储'
+                    '（Android Keystore / iOS Keychain / 桌面 DPAPI），'
+                    '设备被窃取或 root 后仍为密文。',
+                showDivider: true,
+              ),
+              ChRow(
+                leading: ChIconBadge(icon: Icons.key),
+                title: '口令隔离加密',
+                subtitle: '角色档案锁、日记深层等用你的口令派生密钥'
+                    '（SHA-256 2 万轮拉伸 + 随机盐 + MAC），口令本身不落库。',
+                showDivider: false,
+              ),
+            ],
+          ),
+          SizedBox(height: 18),
+          ChSectionHeader(
             title: '防截屏',
             caption: '本应用不提供防截屏 / 禁录屏能力（产品决策）。',
           ),
