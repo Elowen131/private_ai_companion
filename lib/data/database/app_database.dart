@@ -98,6 +98,13 @@ class AppDatabase {
     } catch (e) {
       debugPrint('[db] ensureBuiltinContent failed: $e');
     }
+    // 留存清理：仅当 `retentionDays > 0` 且距上次已超 24h 才实际删，
+    // 否则是 no-op。失败只降级，绝不让冷启动卡住。
+    try {
+      await purgeOldMessages(force: false);
+    } catch (e) {
+      debugPrint('[db] purgeOldMessages failed: $e');
+    }
   }
 
   Future<Database> _open() async {
@@ -271,6 +278,110 @@ class AppDatabase {
     await c.execute('VACUUM');
     await rebuildFtsIfStale(c);
     await setMeta(c, metaKeyLastVacuum, '${nowMs()}');
+  }
+
+  // ---------------------------------------------------------------------------
+  // 数据策略（隐私优先 app 的常用功能）：留存 / 自动备份 / 空间分析
+  // ---------------------------------------------------------------------------
+
+  /// 数据留存天数：0 = 永久保留（缺省）。
+  Future<int> get retentionDays async {
+    final c = await database;
+    return int.tryParse(await getMeta(c, metaKeyRetentionDays) ?? '') ?? 0;
+  }
+
+  /// 设定留存天数。小于 [kMinRetentionDays] 的非零值会被钳到下限，0 表示永久。
+  Future<void> setRetentionDays(int days) async {
+    final c = await database;
+    final safe = days <= 0 ? 0 : (days < kMinRetentionDays ? kMinRetentionDays : days);
+    await setMeta(c, metaKeyRetentionDays, '$safe');
+  }
+
+  /// 自动备份是否开启：缺省开启（仅当显式设为 '0' 才关闭）。
+  Future<bool> get autoBackupEnabled async {
+    final c = await database;
+    return (await getMeta(c, metaKeyAutoBackupEnabled)) != '0';
+  }
+
+  Future<void> setAutoBackupEnabled(bool enabled) async {
+    final c = await database;
+    await setMeta(c, metaKeyAutoBackupEnabled, enabled ? '1' : '0');
+  }
+
+  /// 自动备份间隔（小时），缺省 24。
+  Future<int> get autoBackupIntervalHours async {
+    final c = await database;
+    return int.tryParse(await getMeta(c, metaKeyAutoBackupIntervalHours) ?? '') ?? 24;
+  }
+
+  Future<void> setAutoBackupIntervalHours(int hours) async {
+    final c = await database;
+    final safe = hours < 1 ? 1 : (hours > 24 * 30 ? 24 * 30 : hours);
+    await setMeta(c, metaKeyAutoBackupIntervalHours, '$safe');
+  }
+
+  /// 按留存策略硬删早于 cutoff 的消息。
+  ///
+  /// - [retentionDays] 为 0 时直接返回 0（永久保留，不删任何东西）；
+  /// - 24 小时内已清过则跳过（除非 [force]），避免冷启动/频繁打开反复触发大事务；
+  /// - 仅删 `message` 表：`parent_msg_id` / `memory_vector.source_msg_id` /
+  ///   `plot_edit.message_id` 等引用均无真实外键（v1 表设计），不会级联崩坏，
+  ///   残留悬空引用由 `health()` 的孤立行巡检照常上报。
+  /// 返回被删除的行数。
+  Future<int> purgeOldMessages({bool force = false}) async {
+    final c = await database;
+    final days = await retentionDays;
+    if (days <= 0) return 0;
+    final now = nowMs();
+    final last = int.tryParse(await getMeta(c, metaKeyLastPurge) ?? '0') ?? 0;
+    if (!force &&
+        last > 0 &&
+        now - last < const Duration(hours: 24).inMilliseconds) {
+      return 0;
+    }
+    final cutoff = now - days * 24 * 3600 * 1000;
+    final n = await c.delete(
+      'message',
+      where: 'created_at < ?',
+      whereArgs: [cutoff],
+    );
+    await setMeta(c, metaKeyLastPurge, '$now');
+    await recordAudit(c,
+        scope: 'database',
+        action: 'purge',
+        detail: '$n rows / retention=$days d');
+    return n;
+  }
+
+  /// 各用户表的空间占用（字节，降序）。
+  ///
+  /// 优先用 `dbstat` 虚拟表拿到精确页占用（SQLite 编译时开启
+  /// `SQLITE_ENABLE_DBSTAT_VTAB` 时可用，绝大多数发行版都开）；该模块不可用时
+  /// 退化为「行数 × 256」的粗略估算，保证面板永远有数字、不报错。
+  /// 排除 FTS 影子表与系统表，避免把索引结构算进用户资产。
+  Future<List<Map<String, dynamic>>> storageBreakdown() async {
+    final c = await database;
+    try {
+      final rows = await c.rawQuery(
+        "SELECT name AS t, SUM(pgsize) AS b FROM dbstat "
+        "WHERE name NOT GLOB 'sqlite_*' AND name NOT GLOB '*_fts*' "
+        "AND name != 'android_metadata' GROUP BY name ORDER BY b DESC",
+      );
+      return rows
+          .map((r) => {
+                'table': r['t'] as String,
+                'bytes': (r['b'] as num?)?.toInt() ?? 0,
+              })
+          .toList();
+    } catch (_) {
+      final counts = await tableCounts();
+      final list = counts.entries
+          .map((e) => {'table': e.key, 'bytes': e.value * 256})
+          .toList();
+      list.sort((a, b) =>
+          (b['bytes'] as int).compareTo(a['bytes'] as int));
+      return list;
+    }
   }
 
   /// 紧急清空：清库 + 重建内置内容，保证清空后开箱可用。

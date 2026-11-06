@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/core/backup/backup_service.dart';
+import 'package:private_ai_companion/core/backup/export_service.dart';
 import 'package:private_ai_companion/data/database/app_database.dart';
 import 'package:private_ai_companion/features/settings/topic_library_page.dart';
 
@@ -21,10 +22,16 @@ class _BackupPageState extends State<BackupPage> {
       getIt.isRegistered<AppDatabase>() && getIt.isRegistered<BackupService>();
   AppDatabase get _db => getIt<AppDatabase>();
   BackupService get _svc => getIt<BackupService>();
+  ExportService? get _export =>
+      getIt.isRegistered<ExportService>() ? getIt<ExportService>() : null;
 
   bool _busy = false;
   Map<String, dynamic> _health = {};
   List<BackupInfo> _items = [];
+  List<Map<String, dynamic>> _breakdown = [];
+  bool _autoBackup = true;
+  int _autoInterval = 24;
+  int _retention = 0;
 
   @override
   void initState() {
@@ -37,10 +44,18 @@ class _BackupPageState extends State<BackupPage> {
     try {
       final health = await _db.health();
       final list = await _svc.list();
+      final breakdown = await _db.storageBreakdown();
+      final autoBackup = await _db.autoBackupEnabled;
+      final autoInterval = await _db.autoBackupIntervalHours;
+      final retention = await _db.retentionDays;
       if (mounted) {
         setState(() {
           _health = health;
           _items = list;
+          _breakdown = breakdown;
+          _autoBackup = autoBackup;
+          _autoInterval = autoInterval;
+          _retention = retention;
         });
       }
     } catch (_) {}
@@ -112,6 +127,61 @@ class _BackupPageState extends State<BackupPage> {
     await _reload();
   }
 
+  Future<void> _setAutoBackup(bool v) async {
+    setState(() => _autoBackup = v);
+    try {
+      await _db.setAutoBackupEnabled(v);
+    } catch (_) {}
+    await _reload();
+  }
+
+  Future<void> _setInterval(int h) async {
+    setState(() => _autoInterval = h);
+    try {
+      await _db.setAutoBackupIntervalHours(h);
+    } catch (_) {}
+  }
+
+  Future<void> _setRetention(int d) async {
+    setState(() => _retention = d);
+    try {
+      await _db.setRetentionDays(d);
+    } catch (_) {}
+  }
+
+  Future<void> _purgeNow() async {
+    if (_retention <= 0) {
+      _toast('请先设置留存天数（非「永久」）再清理');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final n = await _db.purgeOldMessages(force: true);
+      _toast(n > 0 ? '已清理 $n 条过期消息' : '没有可清理的过期消息');
+    } catch (e) {
+      _toast('清理失败：$e');
+    }
+    if (mounted) setState(() => _busy = false);
+    await _reload();
+  }
+
+  Future<void> _exportChats() async {
+    final svc = _export;
+    if (svc == null) {
+      _toast('导出服务未就绪');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final r = await svc.exportChats(format: 'json');
+      _toast('已导出 ${r.conversationCount} 段对话、'
+          '${r.messageCount} 条消息\n文件名：${r.fileName}');
+    } catch (e) {
+      _toast('导出失败：$e');
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -149,6 +219,10 @@ class _BackupPageState extends State<BackupPage> {
                     ],
                   ),
                   const SizedBox(height: 8),
+                  _storageCard(cs),
+                  const SizedBox(height: 12),
+                  _policyCard(cs),
+                  const SizedBox(height: 12),
                   ListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
@@ -217,6 +291,137 @@ class _BackupPageState extends State<BackupPage> {
               _metric('外键异常', '${_health['fk_violations'] ?? 0}'),
               _metric('孤立消息', '${_health['orphan_messages'] ?? 0}'),
               _metric('备份份数', '${_health['backup_count'] ?? 0}'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _storageCard(ColorScheme cs) {
+    final top = _breakdown.take(8).toList();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('空间分布',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 10),
+          if (top.isEmpty)
+            const Text('暂无数据', style: TextStyle(fontSize: 12)),
+          ...top.map((e) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text('${e['table']}',
+                          style: const TextStyle(
+                              fontSize: 12, fontFamily: 'monospace')),
+                    ),
+                    Text(_size(e['bytes'] as int? ?? 0),
+                        style: TextStyle(fontSize: 12, color: cs.outline)),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+
+  Widget _policyCard(ColorScheme cs) {
+    const intervals = [12, 24, 48, 168];
+    const retentions = [0, 30, 90, 180, 365];
+    String intervalLabel(int h) =>
+        h >= 168 ? '${h ~/ 168} 周' : h >= 48 ? '${h ~/ 24} 天' : '$h 小时';
+    String retentionLabel(int d) =>
+        d <= 0 ? '永久' : d >= 365 ? '1 年' : '$d 天';
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('数据策略',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('自动备份', style: TextStyle(fontSize: 13)),
+            subtitle: const Text('有新消息时按间隔自动留底',
+                style: TextStyle(fontSize: 11)),
+            value: _autoBackup,
+            onChanged: _busy ? null : _setAutoBackup,
+          ),
+          Row(
+            children: [
+              const Text('备份间隔', style: TextStyle(fontSize: 13)),
+              const Spacer(),
+              DropdownButton<int>(
+                value: intervals.contains(_autoInterval) ? _autoInterval : 24,
+                items: intervals
+                    .map((h) => DropdownMenuItem(
+                          value: h,
+                          child: Text(intervalLabel(h),
+                              style: const TextStyle(fontSize: 13)),
+                        ))
+                    .toList(),
+                onChanged: _busy
+                    ? null
+                    : (v) {
+                        if (v != null) _setInterval(v);
+                      },
+              ),
+            ],
+          ),
+          const Divider(height: 16),
+          Row(
+            children: [
+              const Text('消息留存', style: TextStyle(fontSize: 13)),
+              const Spacer(),
+              DropdownButton<int>(
+                value: retentions.contains(_retention) ? _retention : 0,
+                items: retentions
+                    .map((d) => DropdownMenuItem(
+                          value: d,
+                          child: Text(retentionLabel(d),
+                              style: const TextStyle(fontSize: 13)),
+                        ))
+                    .toList(),
+                onChanged: _busy
+                    ? null
+                    : (v) {
+                        if (v != null) _setRetention(v);
+                      },
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text('留存开启后，早于设定天数的消息会在自动备份后自动清除，'
+              '降低长期留存风险（隐私保护）。',
+              style: TextStyle(fontSize: 11)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              OutlinedButton.icon(
+                icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                label: const Text('立即清理'),
+                onPressed: _busy ? null : _purgeNow,
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.upload_outlined, size: 18),
+                label: const Text('导出聊天数据'),
+                onPressed: _busy ? null : _exportChats,
+              ),
             ],
           ),
         ],

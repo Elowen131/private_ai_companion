@@ -558,15 +558,37 @@ class BackupService {
   // 自动备份
   // -------------------------------------------------------------------------
 
+  /// 自动备份总开关：缺省开启，仅显式关闭才停用。
+  Future<void> setAutoBackupEnabled(bool enabled) async {
+    final c = await _db.database;
+    await setMeta(c, metaKeyAutoBackupEnabled, enabled ? '1' : '0');
+  }
+
+  /// 自动备份间隔（小时），范围 1..720，超出被钳制。
+  Future<void> setAutoBackupIntervalHours(int hours) async {
+    final c = await _db.database;
+    final safe = hours < 1 ? 1 : (hours > 24 * 30 ? 24 * 30 : hours);
+    await setMeta(c, metaKeyAutoBackupIntervalHours, '$safe');
+  }
+
   /// 距上次自动备份超过 [minInterval] 且期间产生了新消息时，静默备份一次。
   /// 无新数据、空库重复启动都不会产生备份文件，避免刷屏占空间。
+  ///
+  /// 行为受 `app_meta` 中的自动备份策略控制：总开关关闭时直接跳过；间隔
+  /// 取用户设定的小时数（缺省 24h）。备份成功后顺带触发一次留存清理
+  /// （若已开启留存），形成「先留底、再清旧」的隐私闭环。
   Future<BackupResult?> autoBackupIfNeeded({
-    Duration minInterval = const Duration(hours: 24),
+    Duration? minInterval,
   }) async {
     final c = await _db.database;
+    if ((await getMeta(c, metaKeyAutoBackupEnabled)) == '0') return null;
+    final hours =
+        int.tryParse(await getMeta(c, metaKeyAutoBackupIntervalHours) ?? '') ?? 24;
+    final interval = minInterval ?? Duration(hours: hours);
+
     final now = nowMs();
     final last = int.tryParse(await getMeta(c, metaKeyLastAutoBackup) ?? '0') ?? 0;
-    if (last > 0 && now - last < minInterval.inMilliseconds) return null;
+    if (last > 0 && now - last < interval.inMilliseconds) return null;
 
     final latest = await MessageRepository(_db).latestCreatedAt();
     final backedUpAt =
@@ -580,6 +602,12 @@ class BackupService {
     final result = await create(kind: 'auto');
     await setMeta(c, metaKeyLastAutoBackup, '$now');
     await setMeta(c, 'last_backup_message_at', '$latest');
+    // 先留底（已完成），再按留存策略清旧本地副本，降低长期留存风险。
+    try {
+      await _db.purgeOldMessages();
+    } catch (_) {
+      // 清理失败绝不能让自动备份本身报错。
+    }
     return result;
   }
 

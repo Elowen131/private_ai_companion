@@ -16,6 +16,19 @@ const String metaKeySeed = 'topic_seed_version';
 const String metaKeyLastAutoBackup = 'last_auto_backup_at';
 const String metaKeyLastVacuum = 'last_vacuum_at';
 
+// ---------- 数据策略（隐私优先 app 的常用功能）----------
+/// 自动备份总开关：'0' = 关闭；缺省（未设）视为开启。
+const String metaKeyAutoBackupEnabled = 'auto_backup_enabled';
+/// 自动备份间隔（小时）：缺省 24。
+const String metaKeyAutoBackupIntervalHours = 'auto_backup_interval_hours';
+/// 数据留存天数：0 = 永久保留（缺省）；>0 时早于 cutoff 的消息会被硬删。
+const String metaKeyRetentionDays = 'retention_days';
+/// 上次执行留存清理的时间戳（毫秒），用于 24h 节流，避免冷启动反复删。
+const String metaKeyLastPurge = 'last_purge_at';
+
+/// 留存天数下限保护：避免误设过小值导致瞬间清空近期聊天。
+const int kMinRetentionDays = 7;
+
 int nowMs() => DateTime.now().millisecondsSinceEpoch;
 
 Future<String?> getMeta(DatabaseExecutor db, String key) async {

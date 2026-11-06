@@ -17,6 +17,7 @@ import 'package:private_ai_companion/data/repositories/topic_repository.dart';
 import 'package:private_ai_companion/data/repositories/world_repositories.dart';
 import 'package:private_ai_companion/core/topic/topic_service.dart';
 import 'package:private_ai_companion/core/backup/backup_service.dart';
+import 'package:private_ai_companion/core/backup/export_service.dart';
 import 'package:private_ai_companion/core/world/world_rules_service.dart';
 import 'package:private_ai_companion/core/time/world_clock.dart';
 import 'package:private_ai_companion/core/world/world_event_service.dart';
@@ -115,6 +116,8 @@ Future<void> setupDependencies() async {
   // ---------- 内容库 / 备份（第 20 章）----------
   getIt.registerSingleton<TopicService>(TopicService(getIt(), db));
   getIt.registerSingleton<BackupService>(BackupService(db, appDir.path));
+  // 开放格式导出（明文、可携带）：与私有加密快照互补，让用户随时带走聊天数据。
+  getIt.registerSingleton<ExportService>(ExportService(db, appDir.path));
 
   // ---------- 推理抽象层：端侧优先 → Mock 兜底 ----------
   // 活跃 provider 是 FallbackLlmProvider：先尝试 LocalLlmProvider（llamadart 端侧），
