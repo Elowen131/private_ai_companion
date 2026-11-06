@@ -231,6 +231,76 @@ jobs:
           fi
           ls "$PKG/llamacpp" | head
 
+      - name: Patch llm_llamacpp hook (iOS framework lookup)
+        # 根因：上游 llm_llamacpp 0.7.0 的 _findEntityNamed 用 File(...).existsSync()
+        # 之类的方式判定实体存在性，对 iOS 需要的「目录型 framework 包」
+        # (llama.framework 是一个目录) 返回 false，于是：
+        #   (1) 官方 iOS 预编译包（release 0.7.0 的 ios-arm64 产物，确实存在于
+        #       github.com/brynjen/dart-llm/releases，2.77MB）被误判为 unusable；
+        #   (2) 源码构建分支就地编译出的 llama.framework 也收集不到，报
+        #       "Missing native library llama.framework"。
+        # 其它平台（android/linux/macos/windows）需要的都是单个 .so/.dylib/.dll
+        # 文件，所以不受影响——这也解释了 iOS 预编译下载量极少、且没人报修。
+        # 修复：把 _findEntityNamed 替换为「按 basename 递归匹配、文件或目录都算」，
+        # 让 iOS 的 framework 包能被正确找到。对单文件平台无影响；若原函数已正确
+        # 则是等价（无害）替换。随后删掉 hooks_runner 缓存，强制用补丁后的源码重编译。
+        run: |
+          PKG=$(find "$HOME/.pub-cache" -type d -name 'llm_llamacpp-0.7.0' | head -1)
+          if [ -z "$PKG" ]; then
+            echo "::error::llm_llamacpp package not found in pub cache"
+            exit 1
+          fi
+          BUILD_DART="$PKG/hook/build.dart"
+          python3 - "$BUILD_DART" <<'PY'
+          import sys, re
+          path = sys.argv[1]
+          src = open(path, encoding='utf-8').read()
+          pat = re.compile(r'_findEntityNamed\s*\(([^)]*)\)\s*\{')
+          m = pat.search(src)
+          if not m:
+              print("::warning::_findEntityNamed not found; skipping patch")
+              sys.exit(0)
+          params = m.group(1)
+          names = []
+          for part in params.split(','):
+              part = part.strip()
+              toks = part.split()
+              if toks:
+                  names.append(toks[-1])
+          dir_name = names[0] if len(names) > 0 else 'dir'
+          name_name = names[1] if len(names) > 1 else 'name'
+          # 从函数起始 '{' 起做括号配对，定位函数结束 '}'
+          brace_start = m.end() - 1
+          assert src[brace_start] == '{'
+          depth = 0
+          i = brace_start
+          while i < len(src):
+              if src[i] == '{':
+                  depth += 1
+              elif src[i] == '}':
+                  depth -= 1
+                  if depth == 0:
+                      brace_end = i
+                      break
+              i += 1
+          head = src[m.start():brace_start + 1]
+          new_body = (
+              "{\n"
+              "  // Patched by CI: also match directory-based frameworks (iOS llama.framework).\n"
+              "  if (!%s.existsSync()) return null;\n"
+              "  for (final entity in %s.listSync(recursive: true)) {\n"
+              "    if (p.basename(entity.path) == %s) return entity;\n"
+              "  }\n"
+              "  return null;\n"
+              "}" % (dir_name, dir_name, name_name)
+          )
+          new_src = src[:m.start()] + head + new_body + src[brace_end + 1:]
+          open(path, 'w', encoding='utf-8').write(new_src)
+          print("Patched _findEntityNamed (dir param='%s', name param='%s')" % (dir_name, name_name))
+          PY
+          # 让 hooks runner 用补丁后的源码重新编译（否则会用缓存的 hook.dill）。
+          rm -rf .dart_tool/hooks_runner
+
       - name: Flutter doctor (diagnostics)
         run: flutter doctor -v
 
