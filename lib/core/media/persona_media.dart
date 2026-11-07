@@ -77,9 +77,21 @@ class PersonaMedia {
 
   /// 依据路径构造 ImageProvider。**只在加载/状态变更时调用**，不要在 build() 里
   /// 反复做同步文件 IO（会掉帧）。路径无效时返回 null，由 UI 回退到占位图。
-  static ImageProvider? provider(String? path) {
+  ///
+  /// [cacheWidth] / [cacheHeight] 用于按**实际显示尺寸**限制解码位图：头像只有
+  /// 28~56dp，而用户从相册选的图可到 1600×1600 —— 不限制时单张解码就是
+  /// 1600×1600×4B ≈ 10.24MB，10 个角色即可挤满 Flutter 默认 100MB ImageCache。
+  /// 不传参数表示不限制，留给聊天背景这类全屏图（调用方已有 1080 宽限制）。
+  static ImageProvider? provider(
+    String? path, {
+    int? cacheWidth,
+    int? cacheHeight,
+  }) {
     if (path == null || path.isEmpty) return null;
     final f = File(path);
-    return f.existsSync() ? FileImage(f) : null;
+    if (!f.existsSync()) return null;
+    final base = FileImage(f);
+    if (cacheWidth == null && cacheHeight == null) return base;
+    return ResizeImage.resizeIfNeeded(cacheWidth, cacheHeight, base);
   }
 }

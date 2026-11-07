@@ -340,15 +340,31 @@ class BackupService {
     final checksum = sha256.convert(utf8.encode(_canonical(payload))).toString();
     payload['checksum'] = checksum;
 
-    final jsonBytes = utf8.encode(jsonEncode(payload));
+    // 只物化**一份**明文 UTF-8 字节。旧实现会先后产生 jsonEncode 字符串、
+    // utf8.encode 列表、Uint8List.fromList 副本、加密入参副本，大库自动备份
+    // 的瞬时峰值可达明文 4~6 倍。checksum 仍按 _canonical 计算，算法不变，
+    // 否则历史快照与 backup_record 里的值会校验失败。
+    final Uint8List plain = () {
+      final s = jsonEncode(payload);
+      return Uint8List.fromList(utf8.encode(s));
+    }();
+    // 明文已完整序列化，行数据可提前释放：不再与密文 / 写盘缓冲同时驻留。
+    // 后续只用 counts / files.length / skipped，不会再读 payload.tables。
+    tables.clear();
+    if (plain.length > SnapshotCipher.maxPlainBytes) {
+      throw BackupFormatException(
+          '快照明文 ${(plain.length / 1048576).toStringAsFixed(1)}MB 超过 '
+          '${SnapshotCipher.maxPlainBytes ~/ 1048576}MB 上限，'
+          '请先清理历史消息或媒体后再备份');
+    }
     final Uint8List output;
     if (mode == null) {
-      output = Uint8List.fromList(jsonBytes);
+      output = plain;
     } else {
       final deviceKey = await _keyStore.deviceKey();
       try {
         output = _cipher.encrypt(
-          plaintext: Uint8List.fromList(jsonBytes),
+          plaintext: plain,
           mode: mode,
           deviceKey: deviceKey,
           passphrase: passphrase,

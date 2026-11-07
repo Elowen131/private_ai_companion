@@ -194,6 +194,15 @@ class AvatarModelService {
     if (!await file.exists()) {
       throw ArgumentError('模型文件不存在：$path');
     }
+    // 体积闸门放在 readAsBytes 之前：解析器的顶点/贴图限额都是**事后**的，
+    // 超大文件若不先挡住，会整份进内存才被拒绝。
+    final size = await file.length();
+    if (size > VrmImportService.maxGlbBytes) {
+      throw FormatException(
+          '模型文件 ${(size / 1048576).toStringAsFixed(1)}MB 超过 '
+          '${VrmImportService.maxGlbBytes ~/ 1048576}MB 导入上限，'
+          '请先用建模工具简化后再导入');
+    }
     final bytes = await file.readAsBytes();
     if (bytes.isEmpty) throw ArgumentError('模型文件为空：$path');
 

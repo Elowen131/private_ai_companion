@@ -38,6 +38,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
 
   Conversation? _conv;
   List<Message> _messages = [];
+  /// 与单聊一致的窗口策略：群聊每轮多人接龙会持续产生消息，整表查询
+  /// 会让内存随群聊年限线性增长。默认只留最近 200 条，按页向前扩展。
+  static const int _initialPageSize = 200;
+  int _visibleLimit = _initialPageSize;
+  bool _hasOlderMessages = false;
+  bool _loadingOlder = false;
   Map<String, String> _nameMap = {};
   final _controller = TextEditingController();
   final _inputFocus = FocusNode();
@@ -78,12 +84,18 @@ class _GroupChatPageState extends State<GroupChatPage> {
         if (p != null) names[pid] = p.name;
       }
     }
-    final msgs = await _msgRepo.listByConversation(widget.conversationId);
+    // keyset 分页取「最近 _visibleLimit 条」，多取一条判断是否有更早消息；
+    // 绝不调用无 limit 的 listByConversation（那是导出/备份专用）。
+    final rows = await _msgRepo.page(widget.conversationId,
+        limit: _visibleLimit + 1);
+    final hasOlder = rows.length > _visibleLimit;
+    final msgs = hasOlder ? rows.sublist(rows.length - _visibleLimit) : rows;
     if (!mounted || seq != _loadSeq) return;
     setState(() {
       _conv = conv;
       _nameMap = names;
       _messages = msgs;
+      _hasOlderMessages = hasOlder;
       // 群成员可能被删减：把已不在场的 id 与超额人数收回来。
       _pickedIds
           .removeWhere((id) => !(conv?.participantIds ?? []).contains(id));
@@ -93,6 +105,18 @@ class _GroupChatPageState extends State<GroupChatPage> {
     });
     // 多人接龙一次会冒出好几条，刷完必须落到底部，否则用户看不到最后一位。
     _scrollToEnd();
+  }
+
+  /// 向前翻一页：只扩大窗口、重新按新 limit 分页，不做整表物化。
+  Future<void> _loadOlder() async {
+    if (!_hasOlderMessages || _loadingOlder) return;
+    setState(() => _loadingOlder = true);
+    _visibleLimit += _initialPageSize;
+    try {
+      await _load();
+    } finally {
+      if (mounted) setState(() => _loadingOlder = false);
+    }
   }
 
   void _scrollToEnd() {
@@ -295,6 +319,19 @@ class _GroupChatPageState extends State<GroupChatPage> {
             ? _conv!.title
             : '群聊（${participants.length} 人）'),
         actions: [
+          if (_hasOlderMessages)
+            IconButton(
+              tooltip: '再加载 $_initialPageSize 条更早消息'
+                  '（当前显示最近 $_visibleLimit 条）',
+              icon: _loadingOlder
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.history_outlined),
+              onPressed: _loadingOlder ? null : _loadOlder,
+            ),
           IconButton(
             tooltip: '本轮由谁发言',
             icon: const Icon(Icons.record_voice_over_outlined),

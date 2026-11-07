@@ -211,12 +211,12 @@ class AvatarPainter extends CustomPainter {
         continue;
       }
 
-      var nx = 0.0, ny = 0.0, nz = 0.0;
-      for (final i in [i0, i1, i2]) {
-        nx += nrm[i * 3];
-        ny += nrm[i * 3 + 1];
-        nz += nrm[i * 3 + 2];
-      }
+      // 不写 `for (final i in [i0, i1, i2])`：每个三角形都会新建一个
+      // List 字面量，7k~20k 三角形 × 30fps = 每秒数十万个短命对象，
+      // 是 GC 抖动的主要来源。显式三标量累加，画面数值完全一致。
+      final nx = nrm[i0 * 3] + nrm[i1 * 3] + nrm[i2 * 3];
+      final ny = nrm[i0 * 3 + 1] + nrm[i1 * 3 + 1] + nrm[i2 * 3 + 1];
+      final nz = nrm[i0 * 3 + 2] + nrm[i1 * 3 + 2] + nrm[i2 * 3 + 2];
       final nxY = nx * cy + nz * sy;
       final nzY = -nx * sy + nz * cy;
       final nyX = ny * cp - nzY * sp;
@@ -227,13 +227,10 @@ class AvatarPainter extends CustomPainter {
       final shade = _materialShade(
           0.58 + 0.42 * (diff * 0.5 + 0.5), diff, 0.42);
 
-      var r = 0.0, g = 0.0, b = 0.0, a = 0.0;
-      for (final i in [i0, i1, i2]) {
-        r += colors[i * 4];
-        g += colors[i * 4 + 1];
-        b += colors[i * 4 + 2];
-        a += colors[i * 4 + 3];
-      }
+      var r = colors[i0 * 4] + colors[i1 * 4] + colors[i2 * 4];
+      var g = colors[i0 * 4 + 1] + colors[i1 * 4 + 1] + colors[i2 * 4 + 1];
+      var b = colors[i0 * 4 + 2] + colors[i1 * 4 + 2] + colors[i2 * 4 + 2];
+      var a = colors[i0 * 4 + 3] + colors[i1 * 4 + 3] + colors[i2 * 4 + 3];
       r = r / 3 * shade;
       g = g / 3 * shade;
       b = b / 3 * shade;
@@ -274,12 +271,9 @@ class AvatarPainter extends CustomPainter {
             i2 >= mesh.vertexCount) {
           continue;
         }
-        var r = 0.0, g = 0.0, b = 0.0;
-        for (final i in [i0, i1, i2]) {
-          r += colors[i * 4];
-          g += colors[i * 4 + 1];
-          b += colors[i * 4 + 2];
-        }
+        final r = colors[i0 * 4] + colors[i1 * 4] + colors[i2 * 4];
+        final g = colors[i0 * 4 + 1] + colors[i1 * 4 + 1] + colors[i2 * 4 + 1];
+        final b = colors[i0 * 4 + 2] + colors[i1 * 4 + 2] + colors[i2 * 4 + 2];
         final f = buffer.facets[visible];
         f.ax = buffer.screenX[i0]; f.ay = buffer.screenY[i0];
         f.bx = buffer.screenX[i1]; f.by = buffer.screenY[i1];

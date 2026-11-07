@@ -19,6 +19,11 @@ class VrmImportService {
 
   static const int maxTextureSide = 512;
 
+  /// 文件级体积闸门：必须在 `readAsBytes()` **之前**检查，否则一个超大或
+  /// 损坏的 GLB 会先完整进内存才被解析器拒绝（低端机直接 OOM）。
+  /// 96MB 足以容纳现有 50MB / 32MB 高精模型，同时挡住数百 MB 级误导入。
+  static const int maxGlbBytes = 96 * 1024 * 1024;
+
   Future<({GlbAvatar avatar, VrmDecoded decoded})> importBytes(
     Uint8List bytes, {
     VrmImportOptions options = const VrmImportOptions(),
@@ -89,6 +94,9 @@ class VrmImportService {
       d.colors[v * 4 + 2] = b.clamp(0.0, 1.0);
       // alpha 保留材质/顶点原有值，不因烘焙变成不透明。
     }
+    // 每张 512² RGBA 约 1MB，多材质模型会叠加；烘焙完立刻释放，
+    // 不让解码图与解析中间数组一起留到返回之后。
+    cache.clear();
   }
 
   static double _wrap(double v) {

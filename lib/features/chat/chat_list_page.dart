@@ -91,7 +91,9 @@ class _ChatListPageState extends State<ChatListPage> {
     final names = <String, String>{for (final p in personas) p.id: p.name};
     // 列表页也要显示自定义头像，否则用户「明明换了头像，只有聊天页变了」。
     final avatars = <String, ImageProvider?>{
-      for (final p in personas) p.id: PersonaMedia.provider(p.avatarPath),
+      for (final p in personas)
+        p.id: PersonaMedia.provider(p.avatarPath,
+            cacheWidth: 160, cacheHeight: 160),
     };
 
     // 最近对话的消息预览：MessageRepository 未装配（测试）时留空即可。

@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:private_ai_companion/core/media/persona_media.dart';
 
@@ -44,15 +42,20 @@ class _ImagePickerFieldState extends State<ImagePickerField> {
   void initState() {
     super.initState();
     _path = widget.initialPath;
-    _image = PersonaMedia.provider(_path);
+    _image = _preview(_path);
   }
+
+  /// 预览框远小于 512px，把解码位图钳到 512²（≈1MB），
+  /// 避免选一张 1600×1600 相册原图就占掉 10MB ImageCache。
+  static ImageProvider? _preview(String? path) =>
+      PersonaMedia.provider(path, cacheWidth: 512, cacheHeight: 512);
 
   @override
   void didUpdateWidget(covariant ImagePickerField old) {
     super.didUpdateWidget(old);
     if (old.initialPath != widget.initialPath) {
       _path = widget.initialPath;
-      _image = PersonaMedia.provider(_path);
+      _image = _preview(_path);
     }
   }
 
@@ -67,7 +70,7 @@ class _ImagePickerFieldState extends State<ImagePickerField> {
     if (r.path == null) return; // 用户取消，保持原设置
     setState(() {
       _path = r.path;
-      _image = FileImage(File(r.path!));
+      _image = _preview(r.path);
     });
     widget.onChanged(r.path);
   }

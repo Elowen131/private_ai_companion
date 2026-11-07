@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import 'avatar_animator.dart';
 import 'avatar_model.dart';
@@ -193,9 +194,15 @@ class _Avatar3DViewState extends State<Avatar3DView>
       child: AnimatedBuilder(
         animation: _ctrl,
         builder: (_, _) {
-          final nowMs = DateTime.now().millisecondsSinceEpoch;
+          // 用帧时间戳（基于单调时钟）而非墙钟：系统时间被回拨时
+          // `nowMs - _lastFrameAt` 会变负，缓存帧会被永远判定为「未超时」，
+          // 画面直接冻结。currentFrameTimeStamp 不受用户改时间影响。
+          final nowMs =
+              SchedulerBinding.instance.currentFrameTimeStamp.inMilliseconds;
           final cached = _cachedFrame;
-          if (cached != null && nowMs - _lastFrameAt < _frameIntervalMs) {
+          if (cached != null &&
+              nowMs >= _lastFrameAt &&
+              nowMs - _lastFrameAt < _frameIntervalMs) {
             // 返回同一个 Widget 实例 → Flutter 跳过子树更新，
             // 这一帧既不重算姿态也不重绘，CPU 占用直接减半以上。
             return cached;

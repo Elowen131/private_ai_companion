@@ -80,23 +80,35 @@ class _ChatPageState extends State<ChatPage> {
   Persona? _persona;
 
   /// 长会话若把全部历史一次性载入，内存会随聊天年限线性增长。
-  /// 默认只保留最近 [_initialPageSize] 条（走 keyset 分页、命中索引），
-  /// 需要翻更早记录时由用户显式点「加载全部历史」，不做隐式截断。
+  /// 默认只保留最近 [_initialPageSize] 条（走 keyset 分页、命中索引）。
+  /// 「加载更早」按 200 条**逐页**扩展窗口，而不是一键关掉窗口做无 limit
+  /// 整表查询——那样会把上万条消息与对应 widget 一次性塞进内存。
   static const int _initialPageSize = 200;
-  bool _showAllHistory = false;
+  int _visibleLimit = _initialPageSize;
   bool _hasOlderMessages = false;
+  bool _loadingOlder = false;
 
   Future<List<Message>> _loadMessages(String cid) async {
-    if (_showAllHistory) {
-      _hasOlderMessages = false;
-      return _msgRepo.listByConversation(cid);
-    }
     // 多取一条用于判断是否还有更早消息；保留的是「最近」N 条而非最早 N 条。
-    final rows = await _msgRepo.page(cid, limit: _initialPageSize + 1);
-    _hasOlderMessages = rows.length > _initialPageSize;
+    final rows = await _msgRepo.page(cid, limit: _visibleLimit + 1);
+    _hasOlderMessages = rows.length > _visibleLimit;
     return _hasOlderMessages
-        ? rows.sublist(rows.length - _initialPageSize)
+        ? rows.sublist(rows.length - _visibleLimit)
         : rows;
+  }
+
+  /// 向前翻一页：始终复用 keyset 分页，刷新与后续发消息都保持新窗口大小。
+  Future<void> _loadOlder() async {
+    if (!_hasOlderMessages || _loadingOlder) return;
+    _loadingOlder = true;
+    if (mounted) setState(() {});
+    _visibleLimit += _initialPageSize;
+    try {
+      await _refresh();
+    } finally {
+      _loadingOlder = false;
+      if (mounted) setState(() {});
+    }
   }
   // 头像 / 背景仅在 _persona 确定后计算一次，避免在 build() 中反复做同步文件 IO。
   ImageProvider? _avatar;
@@ -151,7 +163,11 @@ class _ChatPageState extends State<ChatPage> {
       _bgDecoration = null;
       return;
     }
-    _avatar = PersonaMedia.provider(p.avatarPath);
+    // 头像实际只有 28dp；按 160px 解码即可覆盖 3x 屏，避免把整张
+    // 1600×1600 原图（≈10MB 位图）常驻在 ImageCache 里。
+    _avatar = PersonaMedia.provider(p.avatarPath,
+        cacheWidth: 160, cacheHeight: 160);
+    // 聊天背景是全屏图，保持不限尺寸（下方 DecorationImage 已有 1080 宽限制）。
     final bg = PersonaMedia.provider(p.bgPath);
     _bgDecoration = bg == null
         ? null
@@ -198,7 +214,9 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _load() async {
     _activeConversationId = widget.conversationId;
-    _showAllHistory = false;
+    // 每次进入会话回到默认窗口；用户已翻开的更早消息不跨会话保留。
+    _visibleLimit = _initialPageSize;
+    _loadingOlder = false;
     _persona = await _personaService.get(widget.personaId);
     if (_activeConversationId != null) {
       _messages = await _loadMessages(_activeConversationId!);
@@ -457,19 +475,25 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<String?> _editDialog(String initial) async {
     final c = TextEditingController(text: initial);
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('重新发送'),
-        content: TextField(controller: c, maxLines: 3),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, c.text),
-              child: const Text('发送')),
-        ],
-      ),
-    );
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('重新发送'),
+          content: TextField(controller: c, maxLines: 3),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, c.text),
+                child: const Text('发送')),
+          ],
+        ),
+      );
+    } finally {
+      // 局部 controller 若不释放，每次「重新发送」都会泄漏一个（含 listeners）。
+      c.dispose();
+    }
   }
 
   Future<void> _refresh() async {
@@ -484,20 +508,31 @@ class _ChatPageState extends State<ChatPage> {
   void _append(Message m) {
     _messages.add(m);
     // 会话内持续聊天时也要守住窗口上限，避免长时间聊天又把内存拉满。
-    if (!_showAllHistory && _messages.length > _initialPageSize) {
+    // 用 while 而非 if：窗口被「加载更早」扩到 400/600 条后仍能正确裁剪。
+    while (_messages.length > _visibleLimit) {
       _messages.removeAt(0);
       _hasOlderMessages = true;
     }
     if (mounted) setState(() {});
-    _scrollToEnd();
+    // 用户自己发出的消息必须立刻滚到底，不受流式限频影响。
+    _scrollToEnd(force: true);
   }
 
-  void _scrollToEnd() {
+  int _lastScrollMs = 0;
+
+  /// 流式回复每个 token 都会调一次；若每次都启动一段 200ms 滚动动画，
+  /// 动画会不断互相打断，且每帧多一次布局。这里对连续滚动限频，
+  /// [force] 用于「用户刚发出一条消息」这类必须立刻到底的场景。
+  void _scrollToEnd({bool force = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(_scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200), curve: Curves.ease);
-      }
+      if (!_scroll.hasClients) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // 系统时间回拨时重置，避免差值恒为负导致再也不滚动。
+      if (now < _lastScrollMs) _lastScrollMs = 0;
+      if (!force && now - _lastScrollMs < 120) return;
+      _lastScrollMs = now;
+      _scroll.animateTo(_scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200), curve: Curves.ease);
     });
   }
 
@@ -770,14 +805,18 @@ class _ChatPageState extends State<ChatPage> {
           ),
         ),
         actions: [
-          if (_hasOlderMessages && !_showAllHistory)
+          if (_hasOlderMessages)
             IconButton(
-              icon: const Icon(Icons.history_outlined),
-              tooltip: '加载更早的全部历史（当前仅显示最近 $_initialPageSize 条）',
-              onPressed: () async {
-                _showAllHistory = true;
-                await _refresh();
-              },
+              icon: _loadingOlder
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.history_outlined),
+              tooltip: '再加载 $_initialPageSize 条更早消息'
+                  '（当前显示最近 $_visibleLimit 条）',
+              onPressed: _loadingOlder ? null : _loadOlder,
             ),
           IconButton(
               icon: const Icon(Icons.palette_outlined),

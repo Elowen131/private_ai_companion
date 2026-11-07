@@ -41,6 +41,17 @@ class _MomentsPageState extends State<MomentsPage> {
   String? _coverOverride;
   bool _useCoverOverride = false;
 
+  /// 封面路径解析结果只在加载 / 改图时算一次。原先 `_cover()` 在
+  /// `ListView.builder` 的 itemBuilder 里调 `File.existsSync()`，属于 build
+  /// 路径上的同步磁盘 IO，每次 rebuild 都会碰一次磁盘。
+  File? _coverFile;
+
+  File? _resolveCover(String? path) {
+    if (path == null || path.isEmpty) return null;
+    final f = File(path);
+    return f.existsSync() ? f : null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -53,11 +64,14 @@ class _MomentsPageState extends State<MomentsPage> {
     final interactions =
         await _repo.listInteractionsForIds(moments.map((m) => m.id).toList());
     final ps = await _personas.list();
+    final coverPath = await _prefs.coverPath();
+    _coverFile = _resolveCover(
+        _useCoverOverride ? _coverOverride : coverPath);
     return _Feed(
       moments,
       interactions,
       {for (final p in ps) p.id: p.name},
-      await _prefs.coverPath(),
+      coverPath,
     );
   }
 
@@ -74,6 +88,8 @@ class _MomentsPageState extends State<MomentsPage> {
     setState(() {
       _useCoverOverride = true;
       _coverOverride = path;
+      // 即时反馈：不等 _load() 回来就先把新封面的 File 换上。
+      _coverFile = _resolveCover(path);
       _future = _load();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -249,7 +265,7 @@ class _MomentsPageState extends State<MomentsPage> {
   Widget _cover(BuildContext context, String? rawPath) {
     final path = _useCoverOverride ? _coverOverride : rawPath;
     final theme = Theme.of(context);
-    final file = (path != null && File(path).existsSync()) ? File(path) : null;
+    final file = _coverFile;
     // 无背景图时：主色/次色极淡晕染 + 极简点阵图案（清晰简约，不铺饱和实色块）；
     // 文字随底色切换（浅晕染→深字，照片→白字），保持可读且不抢戏。
     final titleColor = file == null ? theme.colorScheme.onSurface : Colors.white;

@@ -144,7 +144,8 @@ class _CharacterManagerPageState extends State<CharacterManagerPage> {
   }
 
   Widget _row(Persona p, {required bool last}) {
-    final image = PersonaMedia.provider(p.avatarPath);
+    final image = PersonaMedia.provider(p.avatarPath,
+        cacheWidth: 160, cacheHeight: 160);
     final identity = p.identity.trim();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
