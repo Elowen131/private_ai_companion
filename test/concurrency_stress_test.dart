@@ -10,7 +10,6 @@
 // 这些用例验证的是「用户数据层在并发与压力下的正确性」，而非帧率 / 内存字节数——
 // 后者需真机 profiler（见 docs/performance-architecture.md 诚实边界）。
 
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
