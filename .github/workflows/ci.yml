@@ -151,10 +151,41 @@ jobs:
         # PRD 11.4：按 ABI 分包、arm64-v8a 为主。限定单一目标平台既满足分包，
         # 又避免全 ABI 重复编译 llama.cpp 原生库把 7GB CI runner 拖垮 / OOM。
         # AAB 由 Play 按设备 ABI 下发，无需在此拆分。
-        run: flutter build apk --release --split-per-abi --target-platform android-arm64
+        # --obfuscate + --split-debug-info：缩短 Dart AOT 符号、剥离调试信息，
+        # 只减小 libapp.so，不动任何原生库 / ABI / 画面（红线 B5/B6）。符号目录
+        # 不进 APK，仅作为独立 artifact 留存，用于还原线上混淆后的堆栈。
+        run: >-
+          flutter build apk --release
+          --split-per-abi --target-platform android-arm64
+          --obfuscate --split-debug-info=build/app/dart-symbols/apk
+
+      - name: Verify APK size budget (M1~M4, model-not-bundled)
+        # 硬断言：单 ABI、flutter_assets ≤1MB、总体积 ≤92MB 未压缩、
+        # APK ≤100MB、assets/ 内不得出现 GLB/VRM/GGUF 等模型权重。
+        # shrinkResources 裁不到 flutter_assets 与 lib/*.so，必须单独守。
+        run: |
+          APK=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          if [ ! -f "$APK" ]; then
+            APK=$(ls build/app/outputs/flutter-apk/*.apk 2>/dev/null | head -1)
+          fi
+          test -f "$APK" || { echo "::error::no release APK produced"; exit 1; }
+          python3 tools/check_apk_size.py "$APK"
 
       - name: Build release App Bundle (Play Store artifact)
-        run: flutter build appbundle --release
+        # 与 APK 保持同样的符号分离参数，避免两个交付产物 Dart 快照体积不一致。
+        run: >-
+          flutter build appbundle --release
+          --obfuscate --split-debug-info=build/app/dart-symbols/aab
+
+      - name: Upload Dart obfuscation symbols (not shipped)
+        # 仅用于崩溃栈还原，不随 APK/AAB 分发，不影响用户下载体积。
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dart-obfuscation-symbols
+          path: build/app/dart-symbols/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload APK artifact (verification only)
         if: always()

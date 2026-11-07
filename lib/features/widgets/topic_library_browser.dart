@@ -276,26 +276,32 @@ class _TopicLibraryBrowserState extends State<TopicLibraryBrowser> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final items = <Widget>[
-      if (widget.header != null) widget.header!,
-      _searchBar(cs),
-      const SizedBox(height: 8),
+    // 真惰性：这里只列出「怎么构造每一行」，不构造任何 Widget 实例。
+    // 旧写法先 `final items = <Widget>[...]` 把 23 个大类 tile（以及每个
+    // 展开大类下的整棵小类/话题子树）全部建好，ListView.builder 退化成
+    // 单纯的索引访问；展开多个大类时一次 build 就能物化数百~数千个 widget，
+    // 且完全绕开 ListView 的可见窗口。改为闭包后 itemBuilder 只建可见行，
+    // widget 树的结构与内容逐位一致（含 Container 边框与折叠动画）。
+    final rows = <Widget Function()>[
+      if (widget.header != null) () => widget.header!,
+      () => _searchBar(cs),
+      () => const SizedBox(height: 8),
       if (_q.isNotEmpty)
         ..._searchView(cs)
       else ...[
-        _toolbar(cs),
-        const SizedBox(height: 6),
-        ...topicGenres.map((g) => _groupTile(g, cs)),
+        () => _toolbar(cs),
+        () => const SizedBox(height: 6),
+        for (final g in topicGenres) () => _groupTile(g, cs),
       ],
       if (widget.footer != null) ...[
-        const SizedBox(height: 12),
-        widget.footer!,
+        () => const SizedBox(height: 12),
+        () => widget.footer!,
       ],
     ];
     return ListView.builder(
       padding: widget.padding,
-      itemCount: items.length,
-      itemBuilder: (_, i) => items[i],
+      itemCount: rows.length,
+      itemBuilder: (_, i) => rows[i](),
     );
   }
 
@@ -661,11 +667,13 @@ class _TopicLibraryBrowserState extends State<TopicLibraryBrowser> {
 
   // ---------------------------------------------------------------- 搜索
 
-  List<Widget> _searchView(ColorScheme cs) {
-    final out = <Widget>[];
+  /// 与分类浏览共用同一套惰性行描述：搜索结果（最多 60 条话题 + 143 个小类）
+  /// 也只对可见行建 Widget，避免 build 里一次性物化整份结果。
+  List<Widget Function()> _searchView(ColorScheme cs) {
+    final out = <Widget Function()>[];
     if (_matchedSubs.isNotEmpty) {
-      out.add(_hint('匹配的题材（${_matchedSubs.length}）', cs));
-      out.addAll(_matchedSubs.map((s) {
+      out.add(() => _hint('匹配的题材（${_matchedSubs.length}）', cs));
+      out.addAll(_matchedSubs.map<Widget Function()>((s) => () {
         final g = genreBySubId[s.id];
         return InkWell(
           onTap: () => _jumpTo(s),
@@ -693,11 +701,11 @@ class _TopicLibraryBrowserState extends State<TopicLibraryBrowser> {
         );
       }));
     }
-    out.add(_hint('话题内容（${_results.length}）', cs));
+    out.add(() => _hint('话题内容（${_results.length}）', cs));
     final searchErr = _failed['__search__'];
     if (searchErr != null) {
       // 以前这里把异常吞掉了，界面只显示「没有匹配」，用户会以为内容不存在。
-      out.add(Padding(
+      out.add(() => Padding(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
         child: Row(
           children: [
@@ -717,7 +725,7 @@ class _TopicLibraryBrowserState extends State<TopicLibraryBrowser> {
         ),
       ));
     } else if (_results.isEmpty) {
-      out.add(Padding(
+      out.add(() => Padding(
         padding: const EdgeInsets.symmetric(vertical: 24),
         child: Center(
           child: Text(
@@ -728,7 +736,7 @@ class _TopicLibraryBrowserState extends State<TopicLibraryBrowser> {
       ));
     }
     for (final t in _results) {
-      out.add(Container(
+      out.add(() => Container(
         margin: const EdgeInsets.only(bottom: 5),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(

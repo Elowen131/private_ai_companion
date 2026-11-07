@@ -20,6 +20,12 @@ class AvatarFrameBuffer {
   late Int32List argb;
   final List<Facet> facets = [];
 
+  /// 画家算法的排序工作区：每帧只 `clear()` + 写入 facets 引用，不再用
+  /// `sublist(0, visible)` 复制一份 7k~20k 元素的 List（30fps 下约
+  /// 每秒 15~30MB 的临时分配）。sort 只改这里的顺序，`facets` 保持原序，
+  /// 因此 `pickAvatarRegion` 的遍历语义完全不变。
+  final List<Facet> drawList = [];
+
   /// 本帧实际通过背面剔除的三角形数；点击拾取只遍历这一段。
   int visibleCount = 0;
 
@@ -49,7 +55,9 @@ class AvatarFrameBuffer {
 class Facet {
   late double ax, ay, bx, by, cx, cy;
   late double depth;
-  late Color color;
+  // GPU 路径不做逐面 Color 构造（用 argb 顶点色插值），给个默认值而非 late，
+  // 避免任何外部读取在 GPU 帧后触发 LateInitializationError。
+  Color color = const Color(0xFF000000);
 
   /// GPU 路径：三角形三个顶点的 ARGB（由 GPU 插值，得到平滑着色）。
   late int c0, c1, c2;
@@ -250,7 +258,8 @@ class AvatarPainter extends CustomPainter {
       facet.cy = cy2;
       facet.depth = (buffer.screenZ[i0] + buffer.screenZ[i1] + buffer.screenZ[i2]) / 3;
       facet.region = regions[i0];
-      facet.color = Color(_toArgb(a, r, g, b));
+      // 只有软件光栅化读 facet.color；GPU 路径用的是下面三个顶点 ARGB。
+      if (!gpu) facet.color = Color(_toArgb(a, r, g, b));
       if (gpu) {
         facet.c0 = buffer.argb[i0];
         facet.c1 = buffer.argb[i1];
@@ -280,7 +289,7 @@ class AvatarPainter extends CustomPainter {
         f.cx = buffer.screenX[i2]; f.cy = buffer.screenY[i2];
         f.depth = (buffer.screenZ[i0] + buffer.screenZ[i1] + buffer.screenZ[i2]) / 3;
         f.region = regions[i0];
-        f.color = Color(_toArgb(1.0, r / 3, g / 3, b / 3));
+        if (!gpu) f.color = Color(_toArgb(1.0, r / 3, g / 3, b / 3));
         if (gpu) {
           f.c0 = buffer.argb[i0];
           f.c1 = buffer.argb[i1];
@@ -291,8 +300,14 @@ class AvatarPainter extends CustomPainter {
     }
 
     // 4) 画家算法：远的先画（GPU 分桶后桶内仍保持严格深度序）。
+    //    复用 drawList 而非每帧 sublist：写入的仍是 facets[0..visible) 的
+    //    同一批引用，排序结果与原实现逐位一致，但不再产生新数组。
     buffer.visibleCount = visible;
-    final drawList = buffer.facets.sublist(0, visible);
+    final drawList = buffer.drawList
+      ..clear();
+    for (var i = 0; i < visible; i++) {
+      drawList.add(buffer.facets[i]);
+    }
     drawList.sort((p, q) => p.depth.compareTo(q.depth));
 
     if (gpu) {

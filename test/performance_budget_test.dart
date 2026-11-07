@@ -12,6 +12,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:private_ai_companion/core/avatar3d/avatar_tuning.dart';
 import 'package:private_ai_companion/core/avatar3d/vrm_codec.dart';
 import 'package:private_ai_companion/core/avatar3d/vrm_import_service.dart';
 import 'package:private_ai_companion/core/media/persona_media.dart';
@@ -129,6 +130,76 @@ void main() {
       expect(options.maxTriangles, 20000);
       expect(options.maxSourceVertices, 400000);
       expect(options.maxTextureBytes, 8 * 1024 * 1024);
+    });
+  });
+
+  // 「成本型」优化（何时分配 / 何时 rebuild）跑不出行文差异，靠源码契约锁住，
+  // 防止后续改动把它悄悄改回高成本写法。
+  group('L0/L3 成本契约：不得回退', () {
+    String src(String path) => File(path).readAsStringSync();
+
+    test('打字机每 token 只通知气泡，不触发整页 setState', () {
+      final s = src('lib/features/chat/chat_page.dart');
+      expect(s, contains('ValueListenableBuilder<int>'));
+      expect(s, contains('_streamVersion.value++'));
+      expect(s, contains('_streamVersion.dispose()'));
+      expect(s, isNot(contains('setState(() => _streamingText +=')));
+    });
+
+    test('话题库 itemBuilder 真惰性构造，不是索引访问已建好的 Widget', () {
+      final s = src('lib/features/widgets/topic_library_browser.dart');
+      expect(s, contains('final rows = <Widget Function()>['));
+      expect(s, contains('itemBuilder: (_, i) => rows[i]()'));
+      expect(s, isNot(contains('itemBuilder: (_, i) => items[i]')));
+    });
+
+    test('渲染器复用排序工作区，且不再每帧 sublist', () {
+      final s = src('lib/core/avatar3d/avatar_painter.dart');
+      expect(s, contains('final List<Facet> drawList = [];'));
+      expect(s, contains('final drawList = buffer.drawList'));
+      expect(s, isNot(contains('buffer.facets.sublist(0, visible)')));
+      // GPU 路径跳过逐面 Color 构造。
+      expect(s, contains('if (!gpu) facet.color'));
+    });
+
+    test('assets 仍是文件白名单，模型/权重绝不声明进包', () {
+      final s = src('pubspec.yaml');
+      expect(s, contains('- assets/models/persona_visual_manifest.json'));
+      expect(s, contains('- assets/models/cen_youheng_q_portrait.jpg'));
+      for (final ext in ['.glb', '.vrm', '.gguf', '.obj', '.zip']) {
+        expect(s.toLowerCase(), isNot(contains(ext)),
+            reason: 'pubspec.yaml 里出现了模型资产 $ext');
+      }
+    });
+
+    test('造型参数持久化不依赖符号名，启用 --obfuscate 后仍可往返', () {
+      // Dart 混淆只改符号名、不改字符串常量；style/wardrobe/lowerBodySex
+      // 存的是增强 enum 的 .name（编译期字符串），不是 runtimeType.toString()。
+      // 这里锁住「写出去的字符串能被原样读回」的契约，防止以后有人改用反射。
+      for (final style in AvatarStyle.values) {
+        final t = AvatarTuning.forStyle(style);
+        final map = t.toMap();
+        expect(map['style'], isA<String>());
+        expect(map['wardrobe'], isA<String>());
+        expect(map['lowerBodySex'], isA<String>());
+        final back = AvatarTuning.fromMap(map);
+        expect(back.style, style);
+        expect(back.toMap()['wardrobe'], map['wardrobe']);
+        expect(back.toMap()['lowerBodySex'], map['lowerBodySex']);
+      }
+    });
+
+    test('CI 带符号分离与包体门禁，APK/AAB 参数一致', () {
+      final s = src('.github/workflows/ci.yml');
+      // 只统计命令，不把注释里解释参数含义的 `--obfuscate` 字样算进去。
+      final code = s
+          .split('\n')
+          .where((l) => !l.trimLeft().startsWith('#'))
+          .join('\n');
+      expect(code.split('--obfuscate').length - 1, 2,
+          reason: 'APK 与 AAB 都必须启用 Dart 符号分离');
+      expect(s, contains('python3 tools/check_apk_size.py'));
+      expect(File('tools/check_apk_size.py').existsSync(), isTrue);
     });
   });
 }

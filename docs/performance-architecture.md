@@ -65,9 +65,9 @@
 | P0-3 | 备份 4~6 份全量字符串/字节驻留，自动备份静默 OOM | ✅ 已修 |
 | P1-1 | VRM 导入先 `readAsBytes()` 整份 GLB 才做事后限额 | ✅ 已修（文件级闸门） |
 | P1-2 | `AvatarPainter.paint()` 每三角形新建 1~3 个 List | ✅ 已修 |
-| P1-4 | 话题库 `ListView.builder` 的 items 在 build 里已全量构造 | ⏸ 列入 P1 路线（§7） |
+| P1-4 | 话题库 `ListView.builder` 的 items 在 build 里已全量构造 | ✅ 已修（第二轮 §10，闭包行真惰性） |
 | P1-5 | 头像裸 `FileImage`，1600² 图解码 10.24 MB/张 | ✅ 已修 |
-| P1-6 | 打字机每 token 全页 setState + 每 token 滚动动画 | 🔶 部分（滚动节流；局部刷新列入路线） |
+| P1-6 | 打字机每 token 全页 setState + 每 token 滚动动画 | ✅ 已修（滚动节流 + 第二轮 `ValueNotifier` 局部刷新） |
 | P2-6 | `_editDialog` 局部 controller 泄漏 | ✅ 已修 |
 | P2-7 | 30fps 失效判据用墙钟，回拨即冻结 | ✅ 已修（改帧时间戳） |
 | P2-4 | 朋友圈封面在 `itemBuilder` 里同步 `existsSync()` | ✅ 已修 |
@@ -163,7 +163,9 @@ L4 回归守护   ── perf 测试 / 静态分析 / 专项测试 / CI 门禁
 | 加密/备份 | `test/snapshot_cipher_test.dart` + `test/encrypted_snapshot_test.dart`（28 项） |
 | VRM/3D | `test/vrm_import_test.dart`（7 项）+ `avatar3d_perf_test.dart` 帧耗时门禁 |
 | 兼容 | `backup_service_test.dart` / `backup_hardening_test.dart` / `db_policies_test.dart` 固定 `snapshot_encryption='off'` 守旧明文分支 |
-| 包体 | 建议在 CI 增加「APK `lib/` 分类体积 + `flutter_assets` 体积」断言，防依赖悄悄引入原生库（§7 P1） |
+| 包体 | ✅ **已落地**（§10）：`tools/check_apk_size.py` + CI 硬门禁，断言单 ABI / `flutter_assets` ≤1MB / 未压缩 ≤92MB / APK ≤100MB / assets 内无模型权重 |
+| 成本契约 | ✅ **已落地**：`test/performance_budget_test.dart` 锁住打字机局部刷新、话题库惰性、渲染器不回退 `sublist`、pubspec 文件白名单、CI 符号分离 |
+| 画面等价 | ✅ **已落地**：`test/frame_buffer_reuse_test.dart` GPU / 软件双路径逐像素对比 |
 
 ---
 
@@ -198,6 +200,19 @@ L4 回归守护   ── perf 测试 / 静态分析 / 专项测试 / CI 门禁
 | 打字机气泡拆独立 `StatefulWidget` | 每 token 免整页 rebuild | 需改消息列表结构，收益需真机帧率佐证 | 列为 P1 |
 
 > 架构判断：**「体量尽可能小」不是无上限的**。当节省的体积来自「未经真机验证的插件原生库」或「砍设备覆盖」时，潜在代价是端侧推理崩溃 / 用户装不上，这与「保证 APP 质量不降级」直接冲突。因此这些项列为**带验证条件的实验**，不进本轮。
+
+### 7.1 第二轮状态更新（2026-11-07，客户端落地轮 / 详见 §10）
+
+上表是**当时的架构判断**，保留作为决策记录；以下为当前权威状态：
+
+| 上表条目 | 当前状态 | 落地方式 |
+|---|---|---|
+| 话题库 `items` 改真惰性 `itemBuilder` | ✅ **已落地** | 未重做索引映射：把 `List<Widget>` 换成 `List<Widget Function()>`，`itemBuilder` 调用可见行的闭包。widget 树逐位一致，零重构风险 |
+| `AvatarPainter` 原地排序 / `Facet.color` | ✅ **等价部分已落地** | 复用 `AvatarFrameBuffer.drawList`（`clear()` + 写引用 + sort），结果与 `sublist+sort` 逐元素 `identical`；GPU 路径跳过逐面 `Color`；配 GPU/软件双路径逐像素回归（满足上表要求的前置条件） |
+| `AvatarPainter` typed data 复用（`Vertices` 缓冲） | ⏸ **仍未做** | `ui.Vertices.raw` 的 native 数据生命周期未真机验证，复用同一缓冲可能造成跨帧串数据；需真机像素 diff |
+| 打字机气泡拆独立 `StatefulWidget` | ✅ **等价方案已落地** | 不改消息列表结构，用 `ValueNotifier<int>` + `ValueListenableBuilder` 让每 token 只重建气泡里的 `Text`，达到同样的「免整页 rebuild」 |
+| VRM `_cluster` 分块读 BIN / 备份分块 GCM | ⏸ **仍未做** | 分块 GCM 破坏 `AICENC v1`（B4），除非上 v2 双读兼容 |
+| 排除 `libggml-vulkan.so` / `abiFilters` 砍 ABI | ❌ **明确不做** | B5/B6 红线，理由见上表，未因「体量尽可能小」而松动 |
 
 ---
 
@@ -236,5 +251,56 @@ python -c "…按 lib/<abi>/、classes.dex、assets/ 分类求和…"
 | `dart analyze lib test` | **No issues found!** |
 | 关键专项（预算 / 加密容器 / 加密快照 / VRM / 备份 / 加固 / 策略，共 7 个套件） | **50 项 All tests passed!** |
 | 全量 `flutter test` | **+321 −9**：`-9` 从第一行到末行恒定，说明 9 个全是启动期的 `llamadart` loading 失败，**运行过程中零断言失败**；相比上一轮 `312 −9`，本轮新增的 9 个预算测试全部通过 |
+| 第二轮客户端落地（§10） | 见 §10.4，逐项回填 |
 
 > **环境诚实边界**：本机代理 502 会拦 `llamadart` 的 GitHub 原生资产下载，`flutter test` 需临时摘除该依赖再跑；`pubspec.yaml` / `pubspec.lock` / `package_config.json` 跑完必须逐项恢复（本轮已核对恢复）。正式带 `llamadart` 的 CI 三 job 结果需由可联网环境复核。所有真机帧率、内存峰值与透明 surface 表现**尚未实测**，不得当作已达成的指标对外宣称。
+
+---
+
+## 10. 第二轮：客户端开发落地核心优化（2026-11-07）
+
+> 第 1~9 章是架构统筹；本章把 §7 中「暂缓 / 带条件实验 / P1 路线」里**能证明画面逐位一致**的部分真正落成代码，并把「模型不进包」升级为 CI 硬断言。PRD 对应**第 36 章**。
+
+### 10.1 L0 包体：安全收益与明确克制
+
+| 落地 | 文件 | 说明 |
+|---|---|---|
+| Dart 符号分离 | `.github/workflows/ci.yml` | APK 与 AAB 两条 release 命令都加 `--obfuscate --split-debug-info=build/app/dart-symbols/{apk,aab}`；符号映射独立 artifact 留存 7 天，**不随包分发**。修正此前两个产物参数不一致 |
+| 包体硬门禁 | `tools/check_apk_size.py` + CI step | 单 ABI 且仅 arm64 / `flutter_assets` ≤1MB / 未压缩 ≤92MB / APK ≤100MB / `assets/flutter_assets/assets/` 无模型权重 |
+| 契约守护 | `test/performance_budget_test.dart` | pubspec 保持文件白名单、CI 两条命令都带符号分离与门禁 |
+
+**阈值依据（实测）**：arm64 单 ABI 等价未压缩 88.73MB → 92MB 留 3.27MB 余量；`flutter_assets` 0.756MB → 1MB 留 0.244MB。`AssetManifest.bin` 等 Flutter 自动生成的小清单不参与模型判定（通用容器后缀需 >1MB 才报错）。门禁三分支已本地验证：`PASS` / 误打 `avatar.glb` `FAIL` / 多 ABI `FAIL`；本地旧全 ABI 产物正确报 150.03MB 超标。
+
+**明确不做（B5/B6）**：实测 `.so` 全部为 `Stored`（`extractNativeLibs=false`），安装后不解压、不占双份磁盘。改回压缩存储、或 `packaging.jniLibs.excludes` 删 44MB `libggml-vulkan.so`、或 `abiFilters` 只留 arm64，都会让未真机验证的 `dlopen` 行为或设备覆盖承担风险。「体量尽可能小」不以端侧推理崩溃 / 用户装不上为代价。
+
+### 10.2 L1/L3 内存与帧时间
+
+| 文件 | 改动 | 消除的成本 |
+|---|---|---|
+| `features/chat/chat_page.dart` | `ValueNotifier<int> _streamVersion` + `ValueListenableBuilder` 只包打字机气泡 `Text`；`dispose()` 释放 | 每 token 从整页 rebuild 降为 1 个 `Text` rebuild |
+| `features/widgets/topic_library_browser.dart` | `build()` 从 `List<Widget>` 改 `List<Widget Function()>`，`itemBuilder: (_, i) => rows[i]()`；`_searchView` 同步返回闭包列表 | 不再在 build 里物化 23 个大类 tile 及展开子树；搜索结果（≤60 话题 + ≤143 小类）也只对可见行建树 |
+| `core/avatar3d/avatar_painter.dart` | `AvatarFrameBuffer.drawList` 跨帧复用；`facet.color` 仅 `gpu=false` 时构造；字段改非 late 默认值 | 每帧省 7k~20k 引用 List（≈56~160KB）与 7k~20k 个无用 `Color`；30fps 下约 15~30MB/s 临时分配（量级推断，未真机 profiler） |
+
+**B1 守护**：`test/frame_buffer_reuse_test.dart` 验证 `drawList` 与独立 `sublist+sort` 逐元素 `identical`、`buffer.facets` 保持原序（拾取语义不变）、连续两帧不串数据，并在 **GPU 批绘与软件光栅化两条路径**各做一次 `rawRgba` 逐像素对比。光照、材质、MToon 阶梯、面数预算、造型参数、容器格式、快照 checksum **一律未动**。
+
+### 10.3 增量复核与文档销项
+
+- 四条硬约束（无护栏 / 不防截屏 / 朋友圈单人剧场 / 模型不进包）全部守住，第四条被门禁强化；本轮 7 个改动文件 **0 项确凿功能回归**。
+- 修正 PRD 3 类既有落差：4.10「取消打断」「换一条」标 ⚠️ 未实装；「撤回查看概率可调」5 处标为当前固定 `baseProb=0.3`；第 35.6 暂缓清单按 §7.1 更新。遵循「文档与代码对齐、不放假开关、保留原文只加注」。
+- 修掉审计发现的 1 个 **P0**：成本契约测试最初把 CI 注释里的 `--obfuscate` 也计数（3 vs 2）会让 CI 必红，已改为剔除注释行后计数。
+- 首次启用混淆后，造型参数依赖增强 enum `.name` 持久化，已加往返契约测试（混淆只改符号名、不改字符串常量）。
+
+### 10.4 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `dart analyze lib test` | **No issues found!** |
+| `test/frame_buffer_reuse_test.dart` | **5 项 All tests passed**（含双路径逐像素等价） |
+| 成本契约断言静态复现 | **21/21 PASS** |
+| 关键专项（14 个套件，含全部 3D / 加密 / 备份 / 预算 / 渲染等价） | **110 项 All tests passed!** |
+| 全量 `flutter test` | **+332 −9**：9 个失败全部在 `loading` 阶段，报错均为 `Couldn't resolve the package 'llamadart'`（临时摘除原生依赖所致）；日志中无断言 / 异常失败，其余 332 项全过；依赖已逐项恢复 |
+| 3D 帧耗时门禁 | Q 版 `gpu=11.96ms` < 15ms、写实 `gpu=27.07ms` < 30ms |
+
+> **口径更正**：§9 把 `-9` 写成「从第一行到末行恒定」不够准确——计数器是随 9 个套件 loading 失败从 `-1` 逐步累积到 `-9`。结论（9 个都是启动期依赖解析失败、运行过程零断言失败）不变。
+
+> **诚实边界**：`--obfuscate --split-debug-info` 对 `libapp.so` 的**实际收益未本地实测**（代理 502 拦原生资产下载，无法完成 release 构建）；CI 门禁会打印真实分类体积，以可联网环境产物为准，不编造数字。真机帧率 / 内存峰值 / 透明 surface / 正式 CI 三 job 仍需复核。

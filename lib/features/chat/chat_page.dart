@@ -115,6 +115,11 @@ class _ChatPageState extends State<ChatPage> {
   BoxDecoration? _bgDecoration;
   bool _generating = false;
   String _streamingText = ''; // 打字机中的 AI 回复
+  /// 打字机文本的变更通知。流式生成每个 token 只通知这一个值，
+  /// 让「正在输入」气泡单独重建，而不是把整个 Scaffold / ListView /
+  /// AppBar / 输入框全部 setState 一遍（30+ token 的回复就是 30+ 次全页 rebuild）。
+  /// 画面内容不变：气泡读的仍是同一个 _streamingText。
+  final ValueNotifier<int> _streamVersion = ValueNotifier<int>(0);
 
   @override
   void initState() {
@@ -136,6 +141,7 @@ class _ChatPageState extends State<ChatPage> {
     _controller.dispose();
     _scroll.dispose();
     _inputFocus.dispose();
+    _streamVersion.dispose();
     _maybeGenerateDiaryOnExit();
     super.dispose();
   }
@@ -312,7 +318,9 @@ class _ChatPageState extends State<ChatPage> {
           return;
         }
         if (c.isDone) break;
-        setState(() => _streamingText += c.delta);
+        // 局部刷新：只重建打字机气泡里的 Text，不触发整页 rebuild。
+        _streamingText += c.delta;
+        _streamVersion.value++;
         _scrollToEnd();
       }
       if (!mounted) return;
@@ -847,9 +855,12 @@ class _ChatPageState extends State<ChatPage> {
                             Theme.of(context).colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Text(_streamingText.isEmpty
-                          ? '对方正在输入…'
-                          : _streamingText),
+                      child: ValueListenableBuilder<int>(
+                        valueListenable: _streamVersion,
+                        builder: (_, _, _) => Text(
+                          _streamingText.isEmpty ? '对方正在输入…' : _streamingText,
+                        ),
+                      ),
                     ),
                   );
                 }
