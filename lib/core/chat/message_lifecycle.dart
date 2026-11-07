@@ -51,6 +51,8 @@ class MessageLifecycleService {
       ));
       await _memory.voidFromMessage(r.id);
     }
+    // 一并豁免该用户消息对应的用户侧记忆（sourceMsgId 即用户消息 id）。
+    await _memory.voidFromMessage(oldMsgId);
     return resent;
   }
 

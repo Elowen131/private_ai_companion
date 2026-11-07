@@ -167,21 +167,25 @@ class ChatOrchestrator {
       'mood': 0.3,
     });
 
-    // 摄入长期记忆（非 voided）：角色回复 + 用户发言
+    // 摄入长期记忆（非 voided）：角色回复 + 用户发言。
+    // 用户侧记忆的 sourceMsgId 必须绑定真实用户消息 id（parentMsgId），
+    // 否则「撤回即遗忘」按用户消息 id 作废时清不掉用户自身的记忆。
     await _memory.ingest(aiMsg, personaId);
-    await _memory.ingest(
-      Message(
-        id: '${aiMsg.id}_u',
-        conversationId: conversationId,
-        senderId: userId,
-        senderType: 'user',
-        content: ActionParser.parse(userText).toContent(),
-        turnId: turnId,
-        createdAt: now,
-        updatedAt: now,
-      ),
-      personaId,
-    );
+    if (parentMsgId != null) {
+      await _memory.ingest(
+        Message(
+          id: parentMsgId,
+          conversationId: conversationId,
+          senderId: userId,
+          senderType: 'user',
+          content: ActionParser.parse(userText).toContent(),
+          turnId: turnId,
+          createdAt: now,
+          updatedAt: now,
+        ),
+        personaId,
+      );
+    }
     return aiMsg;
   }
 
