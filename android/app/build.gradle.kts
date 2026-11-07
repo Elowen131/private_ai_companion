@@ -41,6 +41,13 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // 单 ABI 分包：本 App 仅面向 arm64 设备（CI 已 --target-platform android-arm64
+        // --split-per-abi），显式收敛 ABI 让「单 ABI」意图固化进构建配置——
+        // 防止本地误跑全 ABI 把原生库体积翻 4 倍、把 7GB CI runner 拖垮 / OOM；
+        // 也让下方 jniLibs excludes 只需列 arm64-v8a。
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     signingConfigs {
@@ -75,32 +82,40 @@ android {
         }
     }
 
-    // 包体：排除「永不加载」的 GPU / WebGPU / OpenCL 原生后端。
+    // 包体：排除「永不加载」的 GPU / WebGPU / OpenCL 原生后端，以及 LiteRT 的 CPU 推理核心。
     // 本 App 端侧推理固定 gpuLayers=0（CPU-only，见 lib/core/llm/local_llm_provider.dart），
-    // 且 3D 是纯 Dart CPU 软渲染（见 lib/core/avatar3d/avatar_view.dart），从不走 GPU/WebGPU，
-    // 因此以下后端在 CPU-only 路径下永不被 dlopen，属纯冗余体积：
+    // 且 3D 是纯 Dart CPU 软渲染（见 lib/core/avatar3d/avatar_view.dart），从不走 GPU/WebGPU；
+    // 模型层全部为 GGUF（llama.cpp 路径，见 lib/core/model/），Dart 代码层对 LiteRT/Gemma
+    // 零引用（grep litert|LiteRT|Gemma 仓库全无命中），因此以下后端在 CPU-only 路径下
+    // 永不被 dlopen，属纯冗余体积：
     //   1) llamadart 的 Vulkan 后端（约 42MB）；
     //   2) LiteRT 的 GPU / WebGPU 加速器 + OpenCL/WebGPU 采样器 + Dawn WebGPU 运行时
     //      （libwebgpu_dawn / libLiteRtGpuAccelerator / libLiteRtWebGpuAccelerator /
-    //       libLiteRtTopKOpenClSampler / libLiteRtTopKWebGpuSampler，约 21.8MB）。
+    //       libLiteRtTopKOpenClSampler / libLiteRtTopKWebGpuSampler，约 21.8MB）；
+    //   3) LiteRT 的 CPU 推理核心（libLiteRtLm.so / libGemmaModelConstraintProvider.so，
+    //      约 29MB）——Google AI Edge 的 LLM 运行时，与 llama.cpp(GGUF) 是完全独立的栈，
+    //      本 App 从不走此路径，为死重。已在 tools/check_apk_size.py 加「必须 absent」硬断言。
     // 保留项（红色底线，不得排除）：llama.cpp CPU 后端（libllama.so / libllama-common.so /
-    // libggml-base.so / libggml-cpu-*）；以及 LiteRT 的 CPU 推理核心（libLiteRtLm.so /
-    // libGemmaModelConstraintProvider.so）——后者是 llamadart 可能启用的备选引擎核心，
-    // 待真机验证确认不加载后可进一步剥离（见 docs/performance-architecture.md §10.5）。
+    // libggml-base.so / libggml-cpu-*）——唯一真正被 dlopen 的推理底座。
     // 如要启用 GPU 推理，须先设置 nGpuLayers>0 并在真机验证，再删除对应 exclude
     // （同时 tools/check_apk_size.py 的硬检查也要放开）。
+    // 注：本 App 已 ndk.abiFilters=arm64-v8a，以下只需列 arm64-v8a。
     packaging {
         jniLibs {
-            val gpuBackends = listOf(
+            val abi = "arm64-v8a"
+            val neverLoaded = listOf(
+                // GPU / WebGPU / OpenCL 后端
                 "libggml-vulkan.so",
                 "libwebgpu_dawn.so",
                 "libLiteRtGpuAccelerator.so",
                 "libLiteRtWebGpuAccelerator.so",
                 "libLiteRtTopKOpenClSampler.so",
                 "libLiteRtTopKWebGpuSampler.so",
+                // LiteRT CPU 推理核心（与 GGUF/llama.cpp 无关的死重）
+                "libLiteRtLm.so",
+                "libGemmaModelConstraintProvider.so",
             )
-            val abis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-            excludes += gpuBackends.flatMap { so -> abis.map { "lib/$it/$so" } }.toSet()
+            excludes += neverLoaded.map { "lib/$abi/$it" }.toSet()
         }
     }
 }

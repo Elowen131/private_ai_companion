@@ -44,6 +44,16 @@ GPU_BACKEND_NAMES = (
     "libLiteRtTopKWebGpuSampler.so",
 )
 
+# LiteRT CPU 推理核心（Google AI Edge LLM 运行时）。本 App 模型层全为 GGUF，
+# 走 llama.cpp 路径，Dart 代码层对 LiteRT/Gemma 零引用，因此该核心与 GGUF 是
+# 完全独立的死重，已从 build.gradle.kts 的 excludes 剔除。列出以便硬断言其「必须 absent」：
+# 若 exclude 命名写错、或未来某版 llamadart 真把 LiteRT 设为兜底引擎，CI 会立刻 FAIL，
+# 而非在真机静默崩溃后才发现。
+LITERT_CPU_CORE_NAMES = (
+    "libLiteRtLm.so",
+    "libGemmaModelConstraintProvider.so",
+)
+
 # 明确属于模型 / 权重：任何大小都不允许出现在 assets/。
 MODEL_SUFFIXES = (
     ".glb", ".gltf", ".vrm", ".obj", ".fbx", ".blend", ".stl",
@@ -164,6 +174,14 @@ def main() -> int:
             "本 App 端侧推理固定 gpuLayers=0（CPU-only）且 3D 为纯 Dart CPU 软渲染，"
             "这些后端永不加载，应从 android/app/build.gradle.kts 的 packaging jniLibs excludes 排除；"
             "如需启用 GPU 推理须同步设置 nGpuLayers>0 并在真机验证"
+        )
+    if any(n.endswith(LITERT_CPU_CORE_NAMES) for n, _ in so_entries):
+        failures.append(
+            "lib/ 内出现 LiteRT CPU 推理核心（libLiteRtLm.so / libGemmaModelConstraintProvider.so，约 29MB）；"
+            "本 App 模型层全为 GGUF（llama.cpp 路径），Dart 代码层对 LiteRT/Gemma 零引用，"
+            "该核心为死重，应从 android/app/build.gradle.kts 的 packaging jniLibs excludes 排除。"
+            "若某版 llamadart 将 LiteRT 设为兜底引擎，须先在真机 adb logcat 验证后仍不加载再剥离，"
+            "否则应移除此 exclude 并放行。"
         )
 
     if failures:

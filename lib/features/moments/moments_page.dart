@@ -76,7 +76,13 @@ class _MomentsPageState extends State<MomentsPage> {
   }
 
   void _refresh() {
-    if (mounted) setState(() => _future = _load());
+    if (!mounted) return;
+    final f = _load();
+    // 注意：setState 的闭包必须返回 void，不能写成 `setState(() => _future = _load())`——
+    // 那样闭包会返回 _load() 的 Future，触发 "setState() callback returned a Future"。
+    setState(() {
+      _future = f;
+    });
   }
 
   /// 设置封面后的即时反馈：本地覆盖 + 重建数据 + 下一帧兜底刷新。
@@ -425,42 +431,61 @@ class _MomentsPageState extends State<MomentsPage> {
 
 /// 发布朋友圈的动态输入。返回 true 表示已发布（供调用方刷新列表）。
 Future<bool?> showPostMoment(BuildContext context) async {
-  final repo = getIt<MomentRepository>();
-  final c = TextEditingController();
-  try {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('发朋友圈'),
-        content: TextField(
-          controller: c,
-          maxLines: 3,
-          decoration: const InputDecoration(hintText: '此刻在想什么？'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          TextButton(
-            onPressed: () async {
-              if (c.text.trim().isEmpty) return;
-              await repo.insert(Moment(
-                id: const Uuid().v4(),
-                ownerType: 'user',
-                ownerId: AppConstants.localUserId,
-                content: c.text.trim(),
-                createdAt: DateTime.now().millisecondsSinceEpoch,
-              ));
-              if (ctx.mounted) Navigator.pop(ctx, true);
-            },
-            child: const Text('发布'),
-          ),
-        ],
+  return showDialog<bool>(
+    context: context,
+    builder: (ctx) => const _PostMomentDialog(),
+  );
+}
+
+/// 发布对话框。TextEditingController 由 State 持有，在对话框 widget 真正从树中移除
+/// （退场动画结束之后）才 dispose，避免在退场动画仍引用控制器时触发
+/// "TextEditingController used after being disposed"。
+class _PostMomentDialog extends StatefulWidget {
+  const _PostMomentDialog();
+
+  @override
+  State<_PostMomentDialog> createState() => _PostMomentDialogState();
+}
+
+class _PostMomentDialogState extends State<_PostMomentDialog> {
+  final TextEditingController _c = TextEditingController();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = getIt<MomentRepository>();
+    return AlertDialog(
+      title: const Text('发朋友圈'),
+      content: TextField(
+        controller: _c,
+        maxLines: 3,
+        decoration: const InputDecoration(hintText: '此刻在想什么？'),
       ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消')),
+        TextButton(
+          onPressed: () async {
+            if (_c.text.trim().isEmpty) return;
+            await repo.insert(Moment(
+              id: const Uuid().v4(),
+              ownerType: 'user',
+              ownerId: AppConstants.localUserId,
+              content: _c.text.trim(),
+              createdAt: DateTime.now().millisecondsSinceEpoch,
+            ));
+            if (context.mounted) Navigator.pop(context, true);
+          },
+          child: const Text('发布'),
+        ),
+      ],
     );
-    return result;
-  } finally {
-    c.dispose();
   }
 }
 
