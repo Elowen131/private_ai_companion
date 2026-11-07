@@ -44,7 +44,7 @@ void main() {
       for (final s in seeds) {
         byCat[s.categoryId] = (byCat[s.categoryId] ?? 0) + 1;
       }
-      // v2 起分类 = 27 个通用分类 + 143 个题材小类，全部要有内容。
+      // v3 起分类 = 35 个通用分类 + 143 个题材小类，全部要有内容。
       expect(byCat.length, allTopicCategories().length);
       for (final c in topicCategories) {
         expect(byCat[c.id] ?? 0, greaterThanOrEqualTo(6),
