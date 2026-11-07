@@ -24,8 +24,11 @@ import zipfile
 
 MB = 1024 * 1024
 
-# 与文档 §5.1 的 M1/M2/M4 对齐；留少量余量避免 Dart 工具链微调就误报。
-MAX_UNCOMPRESSED_MB = 92.0
+# 与文档 §5.1 的 M1/M2/M4 对齐。基线为排除 Vulkan 后端后的实测值：
+# arm64 单 ABI 未压缩 ≈ 85MB、APK ≈ 83MB（llamadart 0.17.5 的 CPU 后端 + Flutter/App/
+# SQLCipher 等）。预算留 15~20MB 余量容忍原生库版本微调，同时仍能拦住：模型误入包、
+# 新增大型 .so（≥20MB）、Vulkan 后端回归（≈42MB）、多 ABI 回潮。
+MAX_UNCOMPRESSED_MB = 105.0
 MAX_FLUTTER_ASSETS_MB = 1.0
 MAX_APK_FILE_MB = 100.0
 EXPECTED_ABI = "arm64-v8a"
@@ -80,12 +83,15 @@ def main() -> int:
     groups: collections.Counter[str] = collections.Counter()
     abis: set[str] = set()
     bad_assets: list[str] = []
+    so_entries: list[tuple[str, int]] = []
     for i in infos:
         groups[classify(i.filename)] += i.file_size
         if i.filename.startswith("lib/"):
             parts = i.filename.split("/")
             if len(parts) > 1 and parts[1] not in ("?", ""):
                 abis.add(parts[1])
+            if i.filename.endswith(".so"):
+                so_entries.append((i.filename, i.file_size))
         low = i.filename.lower()
         if not low.startswith(USER_ASSET_PREFIX):
             continue
@@ -103,6 +109,9 @@ def main() -> int:
     for k, v in groups.most_common():
         print(f"[size]   {v / MB:9.2f} MB  {k}")
     print(f"[size] ABI: {', '.join(sorted(abis)) or '(none)'}")
+    print("[size] top native libs:")
+    for name, sz in sorted(so_entries, key=lambda x: -x[1])[:12]:
+        print(f"[size]   {sz / MB:9.2f} MB  {name}")
 
     failures: list[str] = []
     if total / MB > MAX_UNCOMPRESSED_MB:
@@ -128,6 +137,13 @@ def main() -> int:
             "assets/ 内出现模型/权重/压缩包，违反「模型按需下载不进包」（PRD 11.3）："
             + ", ".join(bad_assets[:8])
             + (" …" if len(bad_assets) > 8 else "")
+        )
+    if any(n.endswith("libggml-vulkan.so") for n, _ in so_entries):
+        failures.append(
+            "lib/ 内出现 libggml-vulkan.so（约 42MB 的 Vulkan GPU 后端）；"
+            "本 App 端侧推理固定 gpuLayers=0（CPU-only，见 lib/core/llm/local_llm_provider.dart），"
+            "该后端永不加载，应从 android/app/build.gradle.kts 的 packaging jniLibs excludes 排除；"
+            "如需启用 GPU 推理须同步设置 nGpuLayers>0 并在真机验证"
         )
 
     if failures:

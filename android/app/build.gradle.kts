@@ -74,6 +74,21 @@ android {
             )
         }
     }
+
+    // 包体：排除 llamadart 的 Vulkan GPU 后端（约 42MB）。
+    // 本 App 端侧推理固定 gpuLayers=0（CPU-only，见 lib/core/llm/local_llm_provider.dart），
+    // 该后端永不加载，属纯冗余体积。如要启用 GPU 推理，须先设置 nGpuLayers>0 并在真机验证，
+    // 再删除此 exclude（同时 tools/check_apk_size.py 的 Vulkan 硬检查也要放开）。
+    packaging {
+        jniLibs {
+            excludes += setOf(
+                "lib/arm64-v8a/libggml-vulkan.so",
+                "lib/armeabi-v7a/libggml-vulkan.so",
+                "lib/x86_64/libggml-vulkan.so",
+                "lib/x86/libggml-vulkan.so",
+            )
+        }
+    }
 }
 
 kotlin {
