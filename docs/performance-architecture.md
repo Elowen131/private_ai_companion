@@ -346,7 +346,8 @@ python -c "…按 lib/<abi>/、classes.dex、assets/ 分类求和…"
 - `libLiteRtLm.so`（24.75MB）+ `libGemmaModelConstraintProvider.so`（4.55MB）是 Google AI Edge 的 LLM 运行时，**与 llama.cpp(GGUF) 是完全独立的栈**，本 App 从不走此路径，属死重。
 
 **落地**：
-- `android/app/build.gradle.kts`：`defaultConfig` 新增 `ndk { abiFilters += listOf("arm64-v8a") }`，把「单 ABI」意图固化进构建配置（CI 早已 `--target-platform android-arm64 --split-per-abi`，此举防止本地误跑全 ABI 把原生库翻 4 倍 / 拖垮 CI runner）；`packaging.jniLibs.excludes` 收敛为仅 `arm64-v8a`，并在既有 GPU/WebGPU/OpenCL 后端之外**新增排除 LiteRT CPU 推理核心**两个 `.so`。
+- `android/app/build.gradle.kts`：`packaging.jniLibs.excludes` 收敛为仅 `arm64-v8a`，并在既有 GPU/WebGPU/OpenCL 后端之外**新增排除 LiteRT CPU 推理核心**两个 `.so`。
+- **单 ABI 的固化方式（踩坑修正）**：曾尝试在 `defaultConfig` 写 `ndk { abiFilters += listOf("arm64-v8a") }`，意图把单 ABI 写死进配置、防本地误跑全 ABI。但 CI 命令 `flutter build apk --release --split-per-abi --target-platform android-arm64` 会让 Flutter **注入 `splits.abi` 过滤器 = arm64-v8a**，而 AGP 规定「`ndk.abiFilters` 与 `splits.abi` 过滤器不能同时存在」，构建直接报错：`Conflicting configuration : 'arm64-v8a' in ndk abiFilters cannot be present when splits abi filters are set`。**因此已撤销 `ndk.abiFilters`**，单 ABI 完全交给 CI 的 `--split-per-abi --target-platform android-arm64` flag 保证；`jniLibs.excludes` 仍只列 `arm64-v8a`（产物只会含该 ABI 的 `.so`）。
 - `tools/check_apk_size.py`：新增 `LITERT_CPU_CORE_NAMES` 常量与「这两个 `.so` 必须 absent」的硬断言——若 exclude 命名写错、或未来某版 `llamadart` 真把 LiteRT 设为兜底引擎，CI 会**立即 FAIL**并给出恢复指引，而非在真机静默崩溃后才发现。
 
 **残留风险（必须真机验证）**：尽管 app 代码零引用且模型全 GGUF，仍无法仅凭仓库确认 `llamadart` 在 CPU-only 下**运行时**不 `dlopen` LiteRT 核心。因此排除后**必须**在真机 `adb logcat` 跑通一条完整 GGUF 回复（确认无 `dlopen: libLiteRtLm.so` 失败 / 无推理崩溃）才算收尾；在此之前，该 ≈29.3MB 剥离属「已排除、待真机确认」状态。若真机证实需要，则回退该 exclude 并放行门禁。

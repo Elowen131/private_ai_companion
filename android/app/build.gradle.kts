@@ -41,13 +41,15 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        // 单 ABI 分包：本 App 仅面向 arm64 设备（CI 已 --target-platform android-arm64
-        // --split-per-abi），显式收敛 ABI 让「单 ABI」意图固化进构建配置——
-        // 防止本地误跑全 ABI 把原生库体积翻 4 倍、把 7GB CI runner 拖垮 / OOM；
-        // 也让下方 jniLibs excludes 只需列 arm64-v8a。
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
+        // 单 ABI 分包：本 App 仅面向 arm64 设备。单 ABI 意图由构建命令固化，而不是这里写死——
+        //   CI 使用 `flutter build apk --release --split-per-abi --target-platform android-arm64`，
+        //   该 flag 会让 Flutter 注入 splits.abi 过滤器 = arm64-v8a。
+        // ❗ 曾在此处写 `ndk { abiFilters += listOf("arm64-v8a") }`，但 AGP 规定
+        //   「ndk.abiFilters 与 splits.abi 过滤器不能同时存在」，会直接报错：
+        //   "Conflicting configuration : 'arm64-v8a' in ndk abiFilters cannot be present
+        //   when splits abi filters are set"。故此处**不得**再加 ndk.abiFilters，
+        //   单 ABI 完全交给 CLI flag 保证。
+        // 下方 jniLibs excludes 只需列 arm64-v8a（因为产物只会含该 ABI 的 .so）。
     }
 
     signingConfigs {
@@ -99,7 +101,8 @@ android {
     // libggml-base.so / libggml-cpu-*）——唯一真正被 dlopen 的推理底座。
     // 如要启用 GPU 推理，须先设置 nGpuLayers>0 并在真机验证，再删除对应 exclude
     // （同时 tools/check_apk_size.py 的硬检查也要放开）。
-    // 注：本 App 已 ndk.abiFilters=arm64-v8a，以下只需列 arm64-v8a。
+    // 注：CI 以 --split-per-abi --target-platform android-arm64 构建，产物只含 arm64-v8a，
+    // 故以下只需列 arm64-v8a（构建脚本中不另设 ndk.abiFilters，避免与 splits.abi 冲突）。
     packaging {
         jniLibs {
             val abi = "arm64-v8a"
