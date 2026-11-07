@@ -681,7 +681,13 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
                     height: 34,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(6),
-                      child: Image.file(File(_photoPath!), fit: BoxFit.cover),
+                      child: Image.file(
+                        File(_photoPath!),
+                        fit: BoxFit.cover,
+                        // 用户上传的照片可能是 4000×3000（≈48MB 位图），
+                        // 这里只显示 42×34 的缩略图，必须限制解码尺寸。
+                        cacheWidth: 126,
+                      ),
                     ),
                   ),
                 if (_palette != null) ...[

@@ -52,6 +52,13 @@ class _AppShellState extends State<AppShell> {
           .autoBackupIfNeeded()
           .catchError((Object _) => null);
     }
+    // 顺序是硬约束：必须等自动备份留底完成后才能清理过期消息。
+    // 若反过来（旧实现放在 warmUp 里），消息会先被硬删、备份再看到
+    // 「最新消息时间回退」而判定无新数据，导致这段聊天从未进过任何快照。
+    // 用户关闭自动备份时仍按留存策略清理（这是用户显式选择的隐私策略）。
+    if (getIt.isRegistered<AppDatabase>()) {
+      await getIt<AppDatabase>().purgeAfterBackup();
+    }
     // 角色按现实时间「不定时」主动问候（本地模型、纯本地、免费）。
     final greeted = await getIt<GreetingService>()
         .maybeGreet()

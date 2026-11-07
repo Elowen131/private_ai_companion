@@ -59,6 +59,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # 只声明真正被代码加载的文件。原先的目录声明会把 3 张从未被 Image.asset /
+  # rootBundle 引用的预览图（≈275KB）一并打进 flutter_assets —— Android 的
+  # shrinkResources 只裁剪 res/，裁剪不到这里。GGUF / GLB 模型按 PRD 11.3
+  # 运行时外置下载，绝不随包。
   assets:
-    - assets/models/      # 本地模型占位（GGUF / ONNX，运行时按需下载，不打包进 APK）
-    - assets/prompts/     # 系统提示词模板
+    - assets/models/persona_visual_manifest.json
+    - assets/models/cen_youheng_q_portrait.jpg

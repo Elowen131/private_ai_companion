@@ -424,6 +424,14 @@ class _BackupPageState extends State<BackupPage> {
               ),
             ],
           ),
+          const SizedBox(height: 6),
+          // 诚实标注：当前快照/导出都是本机明文文件（产品方案 12.2 的
+          // 「加密导出」仍列为规划中），避免用户误以为可以随意分享到公网。
+          const Text(
+            '导出为明文 JSON，仅保留最近 5 份；备份快照同样是本机明文文件。'
+            '两者均含完整对话内容，请自行保管，不要直接上传到公共网盘。',
+            style: TextStyle(fontSize: 11),
+          ),
         ],
       ),
     );

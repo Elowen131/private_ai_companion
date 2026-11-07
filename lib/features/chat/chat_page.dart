@@ -78,6 +78,26 @@ class _ChatPageState extends State<ChatPage> {
 
   List<Message> _messages = [];
   Persona? _persona;
+
+  /// 长会话若把全部历史一次性载入，内存会随聊天年限线性增长。
+  /// 默认只保留最近 [_initialPageSize] 条（走 keyset 分页、命中索引），
+  /// 需要翻更早记录时由用户显式点「加载全部历史」，不做隐式截断。
+  static const int _initialPageSize = 200;
+  bool _showAllHistory = false;
+  bool _hasOlderMessages = false;
+
+  Future<List<Message>> _loadMessages(String cid) async {
+    if (_showAllHistory) {
+      _hasOlderMessages = false;
+      return _msgRepo.listByConversation(cid);
+    }
+    // 多取一条用于判断是否还有更早消息；保留的是「最近」N 条而非最早 N 条。
+    final rows = await _msgRepo.page(cid, limit: _initialPageSize + 1);
+    _hasOlderMessages = rows.length > _initialPageSize;
+    return _hasOlderMessages
+        ? rows.sublist(rows.length - _initialPageSize)
+        : rows;
+  }
   // 头像 / 背景仅在 _persona 确定后计算一次，避免在 build() 中反复做同步文件 IO。
   ImageProvider? _avatar;
   BoxDecoration? _bgDecoration;
@@ -137,7 +157,9 @@ class _ChatPageState extends State<ChatPage> {
         ? null
         : BoxDecoration(
             image: DecorationImage(
-              image: bg,
+              // 聊天背景铺满屏但不需要原始分辨率；用户选 4000px 照片时，
+              // 不限制解码尺寸会让整张 48MB 位图常驻内存。
+              image: ResizeImage.resizeIfNeeded(1080, null, bg),
               fit: BoxFit.cover,
               colorFilter: ColorFilter.mode(
                 Colors.black.withValues(alpha: 0.28),
@@ -176,9 +198,10 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _load() async {
     _activeConversationId = widget.conversationId;
+    _showAllHistory = false;
     _persona = await _personaService.get(widget.personaId);
     if (_activeConversationId != null) {
-      _messages = await _msgRepo.listByConversation(_activeConversationId!);
+      _messages = await _loadMessages(_activeConversationId!);
     }
     _applyVisuals();
     if (mounted) setState(() {});
@@ -451,7 +474,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _refresh() async {
     final cid = await _ensureConversation();
-    _messages = await _msgRepo.listByConversation(cid);
+    _messages = await _loadMessages(cid);
     // 角色头像 / 背景可能在别的入口被改，刷新时一并重算。
     _persona = await _personaService.get(widget.personaId);
     _applyVisuals();
@@ -460,6 +483,11 @@ class _ChatPageState extends State<ChatPage> {
 
   void _append(Message m) {
     _messages.add(m);
+    // 会话内持续聊天时也要守住窗口上限，避免长时间聊天又把内存拉满。
+    if (!_showAllHistory && _messages.length > _initialPageSize) {
+      _messages.removeAt(0);
+      _hasOlderMessages = true;
+    }
     if (mounted) setState(() {});
     _scrollToEnd();
   }
@@ -742,6 +770,15 @@ class _ChatPageState extends State<ChatPage> {
           ),
         ),
         actions: [
+          if (_hasOlderMessages && !_showAllHistory)
+            IconButton(
+              icon: const Icon(Icons.history_outlined),
+              tooltip: '加载更早的全部历史（当前仅显示最近 $_initialPageSize 条）',
+              onPressed: () async {
+                _showAllHistory = true;
+                await _refresh();
+              },
+            ),
           IconButton(
               icon: const Icon(Icons.palette_outlined),
               onPressed: _showAppearance,

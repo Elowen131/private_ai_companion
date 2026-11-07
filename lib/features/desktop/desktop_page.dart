@@ -208,6 +208,10 @@ class _DesktopPageState extends State<DesktopPage> {
                     width: 52,
                     height: 70,
                     fit: BoxFit.cover,
+                    // 源图 512×726，全尺寸解码约占 1.5MB 位图；
+                    // 按 3x 逻辑像素解码即可，避免为 52×70 的缩略图付全图内存。
+                    cacheWidth: 156,
+                    cacheHeight: 210,
                     errorBuilder: (_, _, _) => Container(
                       width: 52,
                       height: 70,

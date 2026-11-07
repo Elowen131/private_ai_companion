@@ -15,6 +15,10 @@ const String metaKeyFts = 'fts_enabled';
 const String metaKeySeed = 'topic_seed_version';
 const String metaKeyLastAutoBackup = 'last_auto_backup_at';
 const String metaKeyLastVacuum = 'last_vacuum_at';
+/// 上次自动备份时的「全库数据水位」指纹（见 AppDatabase.dataFingerprint）。
+const String metaKeyLastBackupFingerprint = 'last_backup_fingerprint';
+/// 上次自动备份时 message 表的最新 created_at（保留兼容旧版快照）。
+const String metaKeyLastBackupMessageAt = 'last_backup_message_at';
 
 // ---------- 数据策略（隐私优先 app 的常用功能）----------
 /// 自动备份总开关：'0' = 关闭；缺省（未设）视为开启。
@@ -28,6 +32,11 @@ const String metaKeyLastPurge = 'last_purge_at';
 
 /// 留存天数下限保护：避免误设过小值导致瞬间清空近期聊天。
 const int kMinRetentionDays = 7;
+/// 留存天数上限：防止恢复的旧备份/损坏 meta 写入极大值，令 cutoff 整数溢出后
+/// 反向命中全部历史消息。
+const int kMaxRetentionDays = 3650;
+/// 自动备份间隔上限（小时）= 30 天。
+const int kMaxAutoBackupIntervalHours = 24 * 30;
 
 int nowMs() => DateTime.now().millisecondsSinceEpoch;
 

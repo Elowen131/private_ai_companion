@@ -49,10 +49,9 @@ class _MomentsPageState extends State<MomentsPage> {
 
   Future<_Feed> _load() async {
     final moments = await _repo.list();
-    final interactions = <String, List<MomentInteraction>>{};
-    for (final m in moments) {
-      interactions[m.id] = await _repo.listInteractions(m.id);
-    }
+    // 一次批量取回全部互动，替代原先「每条动态一次查询」的 N+1。
+    final interactions =
+        await _repo.listInteractionsForIds(moments.map((m) => m.id).toList());
     final ps = await _personas.list();
     return _Feed(
       moments,
@@ -223,19 +222,24 @@ class _MomentsPageState extends State<MomentsPage> {
             return const Center(child: CircularProgressIndicator());
           }
           final feed = snap.data!;
-          return ListView(
+          // 懒构造：动态随时间无限增长，一次性 map 出全部 Widget 会让
+          // 首屏就为几千条历史动态分配整棵子树，滚动也会持续掉帧。
+          return ListView.builder(
             padding: EdgeInsets.zero,
-            children: [
-              _cover(context, feed.cover),
-              if (feed.moments.isEmpty)
-                const Padding(
+            itemCount: feed.moments.isEmpty ? 2 : feed.moments.length + 1,
+            itemBuilder: (context, i) {
+              if (i == 0) return _cover(context, feed.cover);
+              if (feed.moments.isEmpty) {
+                return const Padding(
                   padding: EdgeInsets.all(40),
                   child: Text('还没有动态。点右下角发布，角色也会按人设自动发动态。',
                       textAlign: TextAlign.center),
-                ),
-              ...feed.moments.map((m) =>
-                  _momentTile(context, m, feed.interactions[m.id] ?? [], feed.names)),
-            ],
+                );
+              }
+              final m = feed.moments[i - 1];
+              return _momentTile(
+                  context, m, feed.interactions[m.id] ?? [], feed.names);
+            },
           );
         },
       ),
@@ -267,7 +271,10 @@ class _MomentsPageState extends State<MomentsPage> {
               : null,
           image: file == null
               ? null
-              : DecorationImage(image: FileImage(file), fit: BoxFit.cover),
+              : DecorationImage(
+                  // 封面只有 150px 高，按屏幕宽度解码即可，别把整张原图拉进内存。
+                  image: ResizeImage.resizeIfNeeded(720, null, FileImage(file)),
+                  fit: BoxFit.cover),
         ),
         child: Stack(
           children: [

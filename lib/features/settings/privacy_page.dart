@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/core/backup/backup_service.dart';
+import 'package:private_ai_companion/core/backup/export_service.dart';
 import 'package:private_ai_companion/core/chat/group_chat_orchestrator.dart';
 import 'package:private_ai_companion/core/model/model_manager.dart';
 import 'package:private_ai_companion/core/persona/persona_service.dart';
@@ -161,7 +162,8 @@ class _EmergencyWipeTile extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         title: const Text('确认清空？'),
         content: const Text(
-          '将删除本机所有角色、聊天、记忆、媒体、备份快照与已下载模型，且不可恢复。',
+          '将删除本机所有角色、聊天、记忆、媒体、备份快照、明文导出文件与已下载模型，'
+          '且不可恢复。',
         ),
         actions: [
           TextButton(
@@ -175,9 +177,13 @@ class _EmergencyWipeTile extends StatelessWidget {
     );
     if (ok != true) return;
 
-    // 备份目录里的快照同样属于「全部本地数据」，必须先删，避免清空后仍留副本。
+    // 备份快照与「开放格式导出」的明文聊天副本都属于「全部本地数据」：
+    // 只清库会留下仍可直接打开的完整对话副本，等于清空承诺失效。
     if (getIt.isRegistered<BackupService>()) {
       await getIt<BackupService>().deleteAll();
+    }
+    if (getIt.isRegistered<ExportService>()) {
+      await getIt<ExportService>().deleteAll();
     }
     await getIt<AppDatabase>().wipeAll();
     getIt<GroupChatOrchestrator>().reset();

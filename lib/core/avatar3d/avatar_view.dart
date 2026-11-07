@@ -82,6 +82,16 @@ class _Avatar3DViewState extends State<Avatar3DView>
   double _pitch = 0.06;
   DateTime _actionAt = DateTime.fromMillisecondsSinceEpoch(0);
 
+  // 3D 是纯 Dart CPU 软渲染（22 骨骼姿态 + LBS 蒙皮 + 逐三角形光照/排序）。
+  // 跟着 vsync 在 60/120Hz 全速跑会白烧 CPU 与电量，30fps 对低多边形待机
+  // 动画完全足够。缓存上一帧的 Widget 实例：返回同一个实例时 Flutter 会
+  // 跳过子树更新，连 painter 都不重建。
+  static const int _frameIntervalMs = 33;
+  Widget? _cachedFrame;
+  int _lastFrameAt = 0;
+
+  void _invalidateFrame() => _cachedFrame = null;
+
   @override
   void initState() {
     super.initState();
@@ -91,7 +101,9 @@ class _Avatar3DViewState extends State<Avatar3DView>
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 1000),
-    )..repeat();
+    );
+    // 造型工坊的静态预览卡不需要动画循环（原先 3 张卡各跑一个 60fps 循环）。
+    if (widget.animate) _ctrl.repeat();
   }
 
   void _prepare() {
@@ -100,7 +112,7 @@ class _Avatar3DViewState extends State<Avatar3DView>
   }
 
   @override
-  void didUpdateWidget(covariant Avatar3DView old) {
+  void   didUpdateWidget(covariant Avatar3DView old) {
     super.didUpdateWidget(old);
     if (old.mesh != widget.mesh || old.spec.fingerprint != widget.spec.fingerprint) {
       _prepare();
@@ -108,6 +120,15 @@ class _Avatar3DViewState extends State<Avatar3DView>
     if (old.action != widget.action && widget.action.isNotEmpty) {
       _actionAt = DateTime.now();
     }
+    if (old.animate != widget.animate) {
+      if (widget.animate) {
+        _ctrl.repeat();
+      } else {
+        _ctrl.stop();
+      }
+    }
+    // 任何外部参数变化都必须让缓存帧失效，否则拖拽 / 换情绪会停在旧画面。
+    _invalidateFrame();
     // 外部视角滑杆变化时同步，避免拖拽过的旧角度盖掉新设置。
     if (old.initialYaw != widget.initialYaw) _yaw = widget.initialYaw;
     if (old.initialPitch != widget.initialPitch) _pitch = widget.initialPitch;
@@ -153,6 +174,7 @@ class _Avatar3DViewState extends State<Avatar3DView>
             },
       onPanUpdate: widget.interactive
           ? (d) {
+              _invalidateFrame();
               setState(() {
                 _yaw += d.delta.dx * 0.012;
                 _pitch = (_pitch + d.delta.dy * 0.006).clamp(-0.35, 0.42);
@@ -160,42 +182,60 @@ class _Avatar3DViewState extends State<Avatar3DView>
             }
           : null,
       onDoubleTap: widget.interactive
-          ? () => setState(() {
+          ? () {
+              _invalidateFrame();
+              setState(() {
                 _yaw = widget.initialYaw;
                 _pitch = widget.initialPitch;
-              })
+              });
+            }
           : null,
       child: AnimatedBuilder(
         animation: _ctrl,
         builder: (_, _) {
-          final t = widget.animate ? _ctrl.value * 1000 : 0.0;
-          final actionAge = DateTime.now().difference(_actionAt).inMilliseconds / 1000;
-          final pose = _animator.pose(
-            t,
-            mood: widget.mood,
-            action: widget.action,
-            actionAge: widget.animate ? actionAge : 99,
-          );
-          final drift = (widget.autoRotate && widget.animate)
-              ? math.sin(t * 0.22) * 0.13
-              : 0.0;
-          return CustomPaint(
-            painter: AvatarPainter(
-              mesh: widget.mesh,
-              skinMatrices: pose.skinMatrices,
-              buffer: _buffer,
-              yaw: _yaw + drift,
-              pitch: _pitch,
-              zoom: widget.zoom,
-              moodTint: tint.strength,
-              tint: tint.color,
-              atmosphere: widget.atmosphere,
-              phase: (t % 8) / 8,
-              gpu: widget.gpu,
-            ),
-            size: Size.infinite,
-          );
+          final nowMs = DateTime.now().millisecondsSinceEpoch;
+          final cached = _cachedFrame;
+          if (cached != null && nowMs - _lastFrameAt < _frameIntervalMs) {
+            // 返回同一个 Widget 实例 → Flutter 跳过子树更新，
+            // 这一帧既不重算姿态也不重绘，CPU 占用直接减半以上。
+            return cached;
+          }
+          _lastFrameAt = nowMs;
+          return _cachedFrame = _buildFrame(tint);
         },
+      ),
+    );
+  }
+
+  Widget _buildFrame(({Color color, double strength}) tint) {
+    final t = widget.animate ? _ctrl.value * 1000 : 0.0;
+    final actionAge = DateTime.now().difference(_actionAt).inMilliseconds / 1000;
+    final pose = _animator.pose(
+      t,
+      mood: widget.mood,
+      action: widget.action,
+      actionAge: widget.animate ? actionAge : 99,
+    );
+    final drift = (widget.autoRotate && widget.animate)
+        ? math.sin(t * 0.22) * 0.13
+        : 0.0;
+    return RepaintBoundary(
+      // 把 3D 画布的重绘限制在自己的图层里，避免每帧波及同级 UI。
+      child: CustomPaint(
+        painter: AvatarPainter(
+          mesh: widget.mesh,
+          skinMatrices: pose.skinMatrices,
+          buffer: _buffer,
+          yaw: _yaw + drift,
+          pitch: _pitch,
+          zoom: widget.zoom,
+          moodTint: tint.strength,
+          tint: tint.color,
+          atmosphere: widget.atmosphere,
+          phase: (t % 8) / 8,
+          gpu: widget.gpu,
+        ),
+        size: Size.infinite,
       ),
     );
   }

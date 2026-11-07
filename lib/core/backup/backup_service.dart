@@ -123,6 +123,7 @@ class BackupService {
   /// 进程内序号：同一毫秒内连续创建多份备份时，保证 id / 文件名绝对唯一，
   /// 否则原子 rename 在 Windows 上会因目标已存在而失败。
   int _seq = 0;
+  bool _autoBackupRunning = false;
 
   Directory get backupDir => Directory(p.join(baseDir, 'backups'));
   Directory get mediaDir => Directory(p.join(baseDir, 'media'));
@@ -175,7 +176,8 @@ class BackupService {
         if (!f.existsSync()) continue;
         final len = f.lengthSync();
         if (len > maxFileBytes || total + len > maxTotalBytes) {
-          skipped.add(path);
+          // 只记文件名，不把设备绝对路径写进可被分享的快照文件。
+          skipped.add(p.basename(path));
           continue;
         }
         final digest = sha1.convert(utf8.encode(path)).toString().substring(0, 8);
@@ -185,7 +187,7 @@ class BackupService {
           total += len;
           pathToKey[path] = key;
         } catch (_) {
-          skipped.add(path);
+          skipped.add(p.basename(path));
         }
       }
     }
@@ -346,6 +348,13 @@ class BackupService {
     if (tables is! Map) throw const BackupFormatException('tables 结构错误');
     final counts = data['counts'];
     if (counts is! Map) throw const BackupFormatException('counts 结构错误');
+    // 正常 create() 一定写出全部快照表（哪怕是空数组）。缺少核心表说明这是
+    // 被裁剪/伪造的快照；放行后 replace 会把整库清空却插不回任何数据。
+    const requiredTables = {'conversation', 'message', 'app_meta'};
+    final present = tables.keys.map((e) => e.toString()).toSet();
+    if (!requiredTables.every(present.contains)) {
+      throw const BackupFormatException('快照缺少核心数据表，拒绝恢复以免清空现有数据');
+    }
     final identRe = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
     for (final entry in tables.entries) {
       final name = entry.key.toString();
@@ -465,6 +474,21 @@ class BackupService {
     final c = await _db.database;
     final warnings = <String>[];
 
+    // 恢复的是「数据」，不该把用户当前的数据策略一并回退到备份时点
+    // （留存天数 / 自动备份开关与间隔 / 内容版本水位）。事务后写回。
+    const policyKeys = [
+      metaKeyAutoBackupEnabled,
+      metaKeyAutoBackupIntervalHours,
+      metaKeyRetentionDays,
+      metaKeySeed,
+      metaKeyFts,
+    ];
+    final policy = <String, String>{};
+    for (final k in policyKeys) {
+      final v = await getMeta(c, k);
+      if (v != null) policy[k] = v;
+    }
+
     // 1) 文件先落盘（事务外；重复写无害，失败也不影响数据库一致性）。
     final files = (data['files'] as Map? ?? {}).cast<String, dynamic>();
     var fileCount = 0;
@@ -476,8 +500,17 @@ class BackupService {
         continue;
       }
       try {
-        final bytes = base64Decode(entry.value as String);
-        await File(p.join(baseDir, key)).writeAsBytes(bytes, flush: true);
+        // 快照里的 base64 没有可信来源，先限长再解码，避免损坏/恶意文件撑爆内存。
+        final encoded = entry.value as String;
+        if (encoded.length > 8 * 1024 * 1024) {
+          warnings.add('媒体过大已跳过：$key');
+          continue;
+        }
+        final bytes = base64Decode(encoded);
+        final out = File(p.join(baseDir, key));
+        // 媒体键可能含子目录（media/sub/x.png），父目录不存在会静默丢文件。
+        await out.parent.create(recursive: true);
+        await out.writeAsBytes(bytes, flush: true);
         fileCount++;
       } catch (_) {
         warnings.add('媒体写入失败：$key');
@@ -501,13 +534,18 @@ class BackupService {
     }
 
     final tables = (data['tables'] as Map).cast<String, dynamic>();
+    final present = tables.keys.map((e) => e.toString()).toSet();
+    final missingTables = snapshotTables.where((t) => !present.contains(t)).toList();
     var rowCount = 0;
 
     await c.transaction((txn) async {
       await txn.execute('PRAGMA defer_foreign_keys = ON');
       if (mode == RestoreMode.replace) {
-        // 子表先删（topic_favorite / storyline_node 等有真实外键）。
+        // 只清「快照里确实有」的表。旧版本备份不含后来新增的表，
+        // 若按全白名单删除会把 diary / plot_edit / persona_voice 等新数据
+        // 全部清空却插不回来 —— 这是不可逆的静默数据丢失。
         for (final t in snapshotTables.reversed) {
+          if (!present.contains(t)) continue;
           if (!await tableExists(txn, t)) continue;
           await txn.delete('"$t"');
         }
@@ -536,6 +574,15 @@ class BackupService {
       }
     });
 
+    if (missingTables.isNotEmpty) {
+      warnings.add('该备份来自较旧版本，未包含 ${missingTables.length} 张新表；'
+          '这些表当前的数据已原样保留，未被清空。');
+    }
+    // 恢复后把用户当前策略写回，避免被快照里的旧 app_meta 覆盖。
+    for (final entry in policy.entries) {
+      await setMeta(c, entry.key, entry.value);
+    }
+
     // 3) 恢复后自愈：app_meta 可能带回旧的 fts 标记，索引也可能漂移。
     await ensureFts(c);
     await rebuildFtsIfStale(c);
@@ -558,57 +605,67 @@ class BackupService {
   // 自动备份
   // -------------------------------------------------------------------------
 
-  /// 自动备份总开关：缺省开启，仅显式关闭才停用。
-  Future<void> setAutoBackupEnabled(bool enabled) async {
-    final c = await _db.database;
-    await setMeta(c, metaKeyAutoBackupEnabled, enabled ? '1' : '0');
-  }
+  /// 自动备份总开关：委托给 AppDatabase，避免两处实现日后漂移。
+  Future<void> setAutoBackupEnabled(bool enabled) =>
+      _db.setAutoBackupEnabled(enabled);
 
-  /// 自动备份间隔（小时），范围 1..720，超出被钳制。
-  Future<void> setAutoBackupIntervalHours(int hours) async {
-    final c = await _db.database;
-    final safe = hours < 1 ? 1 : (hours > 24 * 30 ? 24 * 30 : hours);
-    await setMeta(c, metaKeyAutoBackupIntervalHours, '$safe');
-  }
+  /// 自动备份间隔（小时）：同上，统一由 AppDatabase 钳制 1..720。
+  Future<void> setAutoBackupIntervalHours(int hours) =>
+      _db.setAutoBackupIntervalHours(hours);
 
-  /// 距上次自动备份超过 [minInterval] 且期间产生了新消息时，静默备份一次。
-  /// 无新数据、空库重复启动都不会产生备份文件，避免刷屏占空间。
+  /// 距上次自动备份超过设定间隔、且**全库数据水位**变化时静默备份一次。
   ///
-  /// 行为受 `app_meta` 中的自动备份策略控制：总开关关闭时直接跳过；间隔
-  /// 取用户设定的小时数（缺省 24h）。备份成功后顺带触发一次留存清理
-  /// （若已开启留存），形成「先留底、再清旧」的隐私闭环。
-  Future<BackupResult?> autoBackupIfNeeded({
-    Duration? minInterval,
-  }) async {
-    final c = await _db.database;
-    if ((await getMeta(c, metaKeyAutoBackupEnabled)) == '0') return null;
-    final hours =
-        int.tryParse(await getMeta(c, metaKeyAutoBackupIntervalHours) ?? '') ?? 24;
-    final interval = minInterval ?? Duration(hours: hours);
-
-    final now = nowMs();
-    final last = int.tryParse(await getMeta(c, metaKeyLastAutoBackup) ?? '0') ?? 0;
-    if (last > 0 && now - last < interval.inMilliseconds) return null;
-
-    final latest = await MessageRepository(_db).latestCreatedAt();
-    final backedUpAt =
-        int.tryParse(await getMeta(c, 'last_backup_message_at') ?? '0') ?? 0;
-    if (last > 0 && latest <= backedUpAt) return null;
-    if (last == 0 && latest == 0) {
-      // 全新空库：只记时间点，不生成没有内容的备份。
-      await setMeta(c, metaKeyLastAutoBackup, '$now');
-      return null;
-    }
-    final result = await create(kind: 'auto');
-    await setMeta(c, metaKeyLastAutoBackup, '$now');
-    await setMeta(c, 'last_backup_message_at', '$latest');
-    // 先留底（已完成），再按留存策略清旧本地副本，降低长期留存风险。
+  /// 水位改用 `AppDatabase.dataFingerprint()`（各快照表行数 + 时间列最大值），
+  /// 不再只看 `MAX(message.created_at)`：后者会让「只改人设 / 只发朋友圈 /
+  /// 只记日记」的数据永远等不到自动备份，也会在消息被留存清理删掉后误判
+  /// 「没有新数据」。留存清理由 AppShell 放在本方法**之后**执行，保证
+  /// 「先留底、再清旧」。并发调用由 `_autoBackupRunning` 串行化。
+  Future<BackupResult?> autoBackupIfNeeded({Duration? minInterval}) async {
+    if (_autoBackupRunning) return null;
+    _autoBackupRunning = true;
     try {
-      await _db.purgeOldMessages();
-    } catch (_) {
-      // 清理失败绝不能让自动备份本身报错。
+      final c = await _db.database;
+      if ((await getMeta(c, metaKeyAutoBackupEnabled)) == '0') return null;
+      final configured = Duration(hours: await _db.autoBackupIntervalHours);
+      // 调用方传入的 minInterval 只是「额外下限」，不能覆盖用户在 UI 里的设定。
+      final interval = minInterval != null && minInterval > configured
+          ? minInterval
+          : configured;
+      final now = nowMs();
+      final last =
+          int.tryParse(await getMeta(c, metaKeyLastAutoBackup) ?? '0') ?? 0;
+      if (last > 0 && now - last < interval.inMilliseconds) return null;
+
+      final fingerprint = await _db.dataFingerprint();
+      final previous =
+          await getMeta(c, metaKeyLastBackupFingerprint) ?? '';
+      final latest = await MessageRepository(_db).latestCreatedAt();
+
+      if (last == 0 && latest == 0) {
+        // 全新空库：只建立水位基线，不生成没有聊天内容的快照。
+        // 已有消息（例如恢复过数据、或首次启动前就写入过）则继续走备份。
+        await setMeta(c, metaKeyLastAutoBackup, '$now');
+        await setMeta(c, metaKeyLastBackupFingerprint, fingerprint);
+        await setMeta(c, metaKeyLastBackupMessageAt, '$latest');
+        return null;
+      }
+      if (previous.isNotEmpty && previous == fingerprint) return null;
+      if (previous.isEmpty) {
+        // 兼容尚未写入指纹的旧安装：退回原来的 message 时间水位。
+        final backedUpAt = int.tryParse(
+                await getMeta(c, metaKeyLastBackupMessageAt) ?? '0') ??
+            0;
+        if (latest <= backedUpAt) return null;
+      }
+
+      final result = await create(kind: 'auto');
+      await setMeta(c, metaKeyLastAutoBackup, '$now');
+      await setMeta(c, metaKeyLastBackupFingerprint, fingerprint);
+      await setMeta(c, metaKeyLastBackupMessageAt, '$latest');
+      return result;
+    } finally {
+      _autoBackupRunning = false;
     }
-    return result;
   }
 
   // -------------------------------------------------------------------------

@@ -148,7 +148,10 @@ jobs:
         run: flutter pub get
 
       - name: Build release APK (no signing -> debug-sign fallback)
-        run: flutter build apk --release
+        # PRD 11.4：按 ABI 分包、arm64-v8a 为主。限定单一目标平台既满足分包，
+        # 又避免全 ABI 重复编译 llama.cpp 原生库把 7GB CI runner 拖垮 / OOM。
+        # AAB 由 Play 按设备 ABI 下发，无需在此拆分。
+        run: flutter build apk --release --split-per-abi --target-platform android-arm64
 
       - name: Build release App Bundle (Play Store artifact)
         run: flutter build appbundle --release
@@ -158,7 +161,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-release-unsigned
-          path: build/app/outputs/flutter-apk/app-release.apk
+          # --split-per-abi 的产物名带 ABI 后缀（app-arm64-v8a-release.apk）。
+          path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: ignore
 
       - name: Upload AAB artifact (verification only)

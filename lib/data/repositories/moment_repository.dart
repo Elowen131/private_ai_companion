@@ -37,4 +37,29 @@ class MomentRepository {
         orderBy: 'created_at ASC');
     return rows.map(MomentInteraction.fromMap).toList();
   }
+
+  /// 一次取回多条动态的互动（点赞/评论），按 moment_id 分组。
+  /// 朋友圈页原先对每条动态各查一次（N+1），动态越多年底越卡；
+  /// 这里按 400 分块，既避免 SQLite 变量上限，也把 N 次往返压成 1 次。
+  Future<Map<String, List<MomentInteraction>>> listInteractionsForIds(
+      List<String> ids) async {
+    final out = <String, List<MomentInteraction>>{};
+    if (ids.isEmpty) return out;
+    final c = await _db.database;
+    for (var i = 0; i < ids.length; i += 400) {
+      final end = i + 400 > ids.length ? ids.length : i + 400;
+      final chunk = ids.sublist(i, end);
+      final marks = List.filled(chunk.length, '?').join(',');
+      final rows = await c.query('moment_interaction',
+          where: 'moment_id IN ($marks)',
+          whereArgs: chunk,
+          orderBy: 'created_at ASC');
+      for (final r in rows) {
+        final key = r['moment_id'] as String?;
+        if (key == null) continue;
+        (out[key] ??= <MomentInteraction>[]).add(MomentInteraction.fromMap(r));
+      }
+    }
+    return out;
+  }
 }
