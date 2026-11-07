@@ -362,6 +362,9 @@ void main() {
     });
 
     test('没配置时不假装能克隆', () async {
+      // 本用例验证「配置不可用时不假装能克隆」（NOT_CONFIGURED）；
+      // 先打开云端开关，避免被云端总开关（默认关）的 CLOUD_DISABLED 提前拦截。
+      await svc.prefs.setRaw('cloudServicesEnabled', true);
       // 默认是自建服务且地址为空 → normalized 会补默认地址，算「可用」，
       // 所以这里显式清成云端且不带 key。
       await svc.save(const CloneConfig(provider: CloneProvider.elevenlabs));
@@ -430,6 +433,8 @@ void main() {
     });
 
     test('换过服务商后旧克隆被判为不可用，要求重做', () async {
+      // 打开云端开关，让 ElevenLabs 这一支能被真正走到（验证 PROVIDER_CHANGED）。
+      await svc.prefs.setRaw('cloudServicesEnabled', true);
       await svc.save(const CloneConfig(baseUrl: 'http://127.0.0.1:50000'));
       await svc.clonePersona(
         personaId: 'p1',

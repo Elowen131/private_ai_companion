@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/core/backup/backup_service.dart';
+import 'package:private_ai_companion/core/prefs/global_settings.dart';
 import 'package:private_ai_companion/core/backup/export_service.dart';
 import 'package:private_ai_companion/core/chat/group_chat_orchestrator.dart';
 import 'package:private_ai_companion/core/model/model_manager.dart';
@@ -49,7 +50,8 @@ class PrivacyPage extends StatelessWidget {
           SizedBox(height: 18),
           ChSectionHeader(
             title: '数据在哪',
-            caption: '默认全部留在本机；应用不上传、不训练。',
+            caption: '默认全部留在本机；应用不上传、不训练。'
+                '云端功能默认关闭，可在下方「云端服务」开启。',
           ),
           ChPanel(
             padding: EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -107,6 +109,17 @@ class PrivacyPage extends StatelessWidget {
                 showDivider: false,
               ),
             ],
+          ),
+          SizedBox(height: 18),
+          ChSectionHeader(
+            title: '云端服务（默认关闭）',
+            caption: '关闭时禁止把声音样本与朗读文字发往第三方云端'
+                '（ElevenLabs / MiniMax）。你自建的服务（样本只在你自己的网络里，'
+                '不经第三方）不受此开关限制，始终可用。',
+          ),
+          ChPanel(
+            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            children: [_CloudServicesTile()],
           ),
           SizedBox(height: 18),
           ChSectionHeader(title: '危险操作'),
@@ -203,5 +216,43 @@ class _EmergencyWipeTile extends StatelessWidget {
         ),
       );
     }
+  }
+}
+
+/// 云端服务总开关行。
+///
+/// 默认关闭。关闭时 [VoiceCloneService] 在调用边界拒绝向**第三方云端**
+/// （ElevenLabs / MiniMax）出网，即便用户已填好对应密钥也不会外传样本 / 文字；
+/// 用户自建的服务（样本只在自有网络）不受此开关限制，始终可用。
+/// 通过 [ListenableBuilder] 监听 [GlobalSettings]，开关状态变化立刻反映在 UI 上。
+class _CloudServicesTile extends StatelessWidget {
+  const _CloudServicesTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = getIt<GlobalSettings>();
+    return ListenableBuilder(
+      listenable: s,
+      builder: (context, _) => ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: const ChIconBadge(icon: Icons.cloud_off_outlined),
+        title: const Text('允许云端服务', style: TextStyle(fontSize: 13.5)),
+        subtitle: Text(
+          s.cloudServicesEnabled
+              ? '已开启：允许把样本与文字发往 ElevenLabs / MiniMax 等第三方云端'
+                  '（你自建的服务始终可用）'
+              : '已关闭（默认）：不向任何第三方云端发数据；仅你自建的服务可用',
+          style: TextStyle(
+            fontSize: 11.5,
+            height: 1.4,
+            color: chQuiet(context).withValues(alpha: 0.85),
+          ),
+        ),
+        trailing: Switch(
+          value: s.cloudServicesEnabled,
+          onChanged: (v) => s.setCloudServicesEnabled(v),
+        ),
+      ),
+    );
   }
 }

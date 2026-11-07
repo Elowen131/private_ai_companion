@@ -54,6 +54,16 @@ class GlobalSettings extends ChangeNotifier {
   int _quietEnd = 8;
   int get quietEnd => _quietEnd;
 
+  /// 云端服务总开关。**默认关闭（完全离线）**：
+  /// 关闭时，任何会把数据发往第三方/自建云端的能力（云端声纹复刻、云端 TTS 合成）
+  /// 都在调用边界被拒绝，应用保持纯端侧。仅在用户主动开启后，才允许把声音样本与
+  /// 文字发往其自配的云端服务（ElevenLabs / MiniMax / 自建）。
+  ///
+  /// 这是「数据不出本机」承诺的可执行兜底：即便用户在「声音克隆」里填好了密钥，
+  /// 只要本开关为关，代码层也不会发起任何出网请求。
+  bool _cloudServicesEnabled = false;
+  bool get cloudServicesEnabled => _cloudServicesEnabled;
+
   bool _loaded = false;
   bool get loaded => _loaded;
 
@@ -86,6 +96,9 @@ class GlobalSettings extends ChangeNotifier {
     _quietStart = qs is num ? qs.toInt().clamp(0, 23) : 23;
     final qe = await prefs.raw('quietEnd');
     _quietEnd = qe is num ? qe.toInt().clamp(0, 23) : 8;
+
+    // 云端总开关：脏值一律回落 false（完全离线），宁可不联网也不误出网。
+    _cloudServicesEnabled = (await prefs.raw('cloudServicesEnabled')) == true;
 
     _loaded = true;
     notifyListeners();
@@ -153,6 +166,13 @@ class GlobalSettings extends ChangeNotifier {
     _quietEnd = end.clamp(0, 23);
     await prefs.setRaw('quietStart', _quietStart);
     await prefs.setRaw('quietEnd', _quietEnd);
+    notifyListeners();
+  }
+
+  /// 设置云端服务总开关。默认应通过 UI 关闭；这里只负责持久化与广播。
+  Future<void> setCloudServicesEnabled(bool v) async {
+    _cloudServicesEnabled = v;
+    await prefs.setRaw('cloudServicesEnabled', v);
     notifyListeners();
   }
 

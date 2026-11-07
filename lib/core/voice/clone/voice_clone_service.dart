@@ -91,6 +91,7 @@ class VoiceCloneService extends ChangeNotifier {
     required VoiceProfile profile,
     String promptText = '',
   }) async {
+    if (!await _outboundAllowed(_config.provider)) throw _cloudDisabled;
     if (!ready) {
       throw CloneException(
         'NOT_CONFIGURED',
@@ -136,6 +137,7 @@ class VoiceCloneService extends ChangeNotifier {
     String text, {
     double speed = 1.0,
   }) async {
+    if (!await _outboundAllowed(_config.provider)) throw _cloudDisabled;
     if (!ready) {
       throw CloneException('NOT_CONFIGURED', '克隆服务还没配置好');
     }
@@ -171,14 +173,42 @@ class VoiceCloneService extends ChangeNotifier {
   /// 而不是「必须先联网才能停用」。
   Future<void> removeClone(String personaId) async {
     final p = await repo.get(personaId);
+    // 删除克隆：自建服务（用户自有设施）始终尝试删远端；第三方云端则仅在
+    // 开关开启时出网（不偷偷外传）。无论远端删不删，都清本地记录。
     if (p != null && p.cloned && p.cloneProvider == _config.provider.id) {
-      await client.deleteVoice(_config, p.cloneVoiceId);
+      final provider =
+          CloneProvider.byId(p.cloneProvider) ?? CloneProvider.selfHosted;
+      if (await _outboundAllowed(provider)) {
+        await client.deleteVoice(_config, p.cloneVoiceId);
+      }
     }
     await repo.clearClone(personaId);
     notifyListeners();
   }
 
-  Future<CloneProbe> probe(CloneConfig c) => client.probe(c);
+  /// 给定服务商，是否允许本次出网。
+  ///
+  /// 仅**第三方云端**（ElevenLabs / MiniMax，[CloneProvider.uploadsSample]=true）
+  /// 受「允许云端服务」开关约束——关闭时禁止把样本 / 文字发往第三方。
+  /// 自建服务（[CloneProvider.selfHosted]）是用户自有设施，样本只在用户自己的
+  /// 网络里传输、不经过任何第三方，不视为「云端」，默认即允许（也是产品设计的
+  /// 离线友好路径）。
+  Future<bool> _outboundAllowed(CloneProvider provider) async {
+    if (provider == CloneProvider.selfHosted) return true;
+    return (await prefs.raw('cloudServicesEnabled')) == true;
+  }
+
+  /// 云端被关闭时抛出的统一异常，文案直接指向开关位置。
+  CloneException get _cloudDisabled => CloneException(
+        'CLOUD_DISABLED',
+        '云端服务已在「设置 → 隐私与数据 → 允许云端服务」中关闭。'
+        '开启后才会把声音样本与文字发往你自配的云端服务。',
+      );
+
+  Future<CloneProbe> probe(CloneConfig c) async {
+    if (!await _outboundAllowed(c.provider)) throw _cloudDisabled;
+    return client.probe(c);
+  }
 
   /// MiniMax 的 voice_id 只接受字母数字、且不能太短；自建/EL 也都能用同一套。
   ///
