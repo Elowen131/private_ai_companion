@@ -50,7 +50,8 @@ dependencies:
   llamadart: ^0.17.5
   llamadart_llama_cpp_flutter: ^0.17.3   # iOS/macOS 的 llama.cpp XCFramework 伴侣包
   image_picker: ^1.2.4
-
+  # 加密快照 / 加密导出：AES-256-GCM 标准纯 Dart 实现（无原生库、不增 APK 原生体积）
+  pointycastle: ^3.9.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

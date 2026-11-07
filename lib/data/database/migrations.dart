@@ -29,6 +29,12 @@ const String metaKeyAutoBackupIntervalHours = 'auto_backup_interval_hours';
 const String metaKeyRetentionDays = 'retention_days';
 /// 上次执行留存清理的时间戳（毫秒），用于 24h 节流，避免冷启动反复删。
 const String metaKeyLastPurge = 'last_purge_at';
+/// 加密快照策略：'device'（缺省，AES-256-GCM + 设备密钥）/ 'off'（明文兼容模式）。
+/// 口令归档不使用本键：口令绝不持久化，只在用户手动导出时按次传入。
+const String metaKeySnapshotEncryption = 'snapshot_encryption';
+/// 归档口令的不可逆派生校验值，仅用于设置页显示「是否已设置口令」。
+/// 口令本身不落库、不进快照、不进日志。
+const String metaKeySnapshotPassphraseVerifier = 'snapshot_passphrase_verifier';
 
 /// 留存天数下限保护：避免误设过小值导致瞬间清空近期聊天。
 const int kMinRetentionDays = 7;

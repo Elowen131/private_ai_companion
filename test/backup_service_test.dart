@@ -61,6 +61,9 @@ void main() {
     dir = await tempDir('backup');
     db = dbAt(p.join(dir.path, 'companion.db'));
     svc = BackupService(db, dir.path);
+    // 本文件验证快照内容 / 篡改拒绝 / 恢复契约，固定走明文兼容分支；
+    // 默认 AES-256-GCM 加密由 encrypted_snapshot_test.dart 单独覆盖。
+    await setMeta(await db.database, metaKeySnapshotEncryption, 'off');
     await seedData();
   });
 

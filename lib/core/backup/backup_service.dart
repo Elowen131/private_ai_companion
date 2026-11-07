@@ -3,8 +3,12 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:private_ai_companion/core/security/crypto_service.dart';
+import 'package:private_ai_companion/core/security/snapshot_cipher.dart';
+import 'package:private_ai_companion/core/security/snapshot_key_store.dart';
 import 'package:private_ai_companion/data/database/app_database.dart';
 import 'package:private_ai_companion/data/database/migrations.dart';
 import 'package:private_ai_companion/data/database/schema.dart';
@@ -13,6 +17,10 @@ import 'package:private_ai_companion/data/repositories/message_repository.dart';
 /// 快照格式标识。改结构必须递增 [snapshotVersion]，并保留旧版本读取能力。
 const String snapshotFormat = 'private_ai_companion.snapshot';
 const int snapshotVersion = 1;
+
+/// 加密快照文件扩展名（AES-256-GCM 容器），旧明文快照仍为 `.json`。
+/// 是否加密**以文件头 magic 探测为准**，不依赖扩展名，避免被改名的文件漏判。
+const String snapshotEncryptedExtension = 'aicbak';
 
 const String _assetPrefix = '__AIC_ASSET__';
 const String _assetSuffix = '__';
@@ -95,10 +103,16 @@ class RestoreResult {
   });
 }
 
-/// 本地备份服务：单文件 JSON 快照 + SHA-256 校验 + 原子恢复。
+/// 本地备份服务：单文件快照 + SHA-256 校验 + 原子恢复。
+///
+/// **加密（PRD 12.2 正式需求）**：新快照默认用 AES-256-GCM 加密（设备密钥存
+/// 系统安全存储），也支持按次传入归档口令生成可跨设备解密的口令快照；旧版
+/// 明文 `.json` 快照仍可校验/恢复，升级不会把历史备份变成打不开的死文件。
+/// `snapshot_encryption = 'off'` 是显式兼容开关，设置页会提示其风险。
 ///
 /// 关键设计：
-/// - **不篡改**：导出前先校验库完整性；文件读取失败/超限只记录不中断。
+/// - **不篡改**：导出前先校验库完整性；文件读取失败/超限只记录不中断；
+///   密文容器的头与密文由 GCM tag 一并认证，改动任一字节都拒绝恢复。
 /// - **可移植**：媒体文件路径在快照里替换成占位符，恢复时写到本机私有
 ///   `media/` 并回写新绝对路径，跨设备恢复不会出现「图片全丢」。
 /// - **可回滚**：任何恢复动作前自动生成 `pre_restore` 快照。
@@ -113,12 +127,20 @@ class BackupService {
   final int maxFileBytes;
   final int maxTotalBytes;
 
+  /// 设备密钥来源与加密器。测试注入 [StaticSnapshotKeyStore] 即可完全离线。
+  final SnapshotKeyStore _keyStore;
+  final SnapshotCipher _cipher;
+
   BackupService(
     this._db,
     this.baseDir, {
     this.maxFileBytes = 6 * 1024 * 1024,
     this.maxTotalBytes = 24 * 1024 * 1024,
-  });
+    SnapshotKeyStore? keyStore,
+    SnapshotCipher cipher = const SnapshotCipher(),
+  })  : _keyStore = keyStore ??
+            const SecureSnapshotKeyStore(FlutterSecureStorage()),
+        _cipher = cipher;
 
   /// 进程内序号：同一毫秒内连续创建多份备份时，保证 id / 文件名绝对唯一，
   /// 否则原子 rename 在 Windows 上会因目标已存在而失败。
@@ -131,11 +153,92 @@ class BackupService {
   File fileOf(String fileName) => File(p.join(backupDir.path, fileName));
 
   // -------------------------------------------------------------------------
+  // 加密策略（app_meta，恢复时会写回，不会被旧快照回退）
+  // -------------------------------------------------------------------------
+
+  /// 当前加密开关：缺省开启；只有显式写入 'off' 才回退到明文。
+  Future<bool> snapshotEncryptionEnabled() async {
+    final c = await _db.database;
+    return (await getMeta(c, metaKeySnapshotEncryption)) != 'off';
+  }
+
+  Future<void> setSnapshotEncryption(bool enabled) async {
+    final c = await _db.database;
+    await setMeta(c, metaKeySnapshotEncryption, enabled ? 'device' : 'off');
+    await recordAudit(c,
+        scope: 'backup',
+        action: 'encryption',
+        refId: 'snapshot',
+        detail: enabled ? 'device' : 'off');
+  }
+
+  /// 是否设置过归档口令（只存不可逆派生校验值，口令本身从不落库）。
+  Future<bool> hasArchivePassphrase() async {
+    final c = await _db.database;
+    final v = await getMeta(c, metaKeySnapshotPassphraseVerifier);
+    return v != null && v.isNotEmpty;
+  }
+
+  /// 记录 / 清除归档口令校验值。传 null 或空串表示清除。
+  Future<void> setArchivePassphraseVerifier(String? passphrase) async {
+    final c = await _db.database;
+    if (passphrase == null || passphrase.isEmpty) {
+      await setMeta(c, metaKeySnapshotPassphraseVerifier, '');
+    } else {
+      await setMeta(c, metaKeySnapshotPassphraseVerifier,
+          CryptoService.deriveVerifier(passphrase));
+    }
+    await recordAudit(c,
+        scope: 'backup', action: 'passphrase', refId: 'snapshot');
+  }
+
+  /// 校验用户输入的归档口令是否与已登记的校验值一致。
+  Future<bool> checkArchivePassphrase(String passphrase) async {
+    final c = await _db.database;
+    final v = await getMeta(c, metaKeySnapshotPassphraseVerifier);
+    if (v == null || v.isEmpty) return true; // 未设置校验值时不做额外限制
+    return CryptoService.verify(passphrase, v);
+  }
+
+  /// 紧急清空时销毁设备密钥：残留的密文副本即使被找回也解不开。
+  Future<void> destroySnapshotKey() => _keyStore.destroy();
+
+  Future<SnapshotKeyMode?> _resolveEncryption(
+    String kind,
+    SnapshotKeyMode? explicit,
+    String? passphrase,
+  ) async {
+    final c = await _db.database;
+    var mode = explicit ??
+        ((await getMeta(c, metaKeySnapshotEncryption)) == 'off'
+            ? null
+            : SnapshotKeyMode.device);
+    // 自动备份 / 恢复前回滚点是无人值守的，口令不可能持久化给它用；
+    // 强制退回设备密钥，保证「先留底再清旧」这条链永远不断。
+    if (mode == SnapshotKeyMode.passphrase && kind != 'manual') {
+      mode = SnapshotKeyMode.device;
+    }
+    if (mode == SnapshotKeyMode.passphrase &&
+        (passphrase == null || passphrase.isEmpty)) {
+      throw const BackupFormatException('生成口令加密快照需要提供归档口令');
+    }
+    return mode;
+  }
+
+  // -------------------------------------------------------------------------
   // 导出
   // -------------------------------------------------------------------------
 
-  Future<BackupResult> create({String kind = 'manual'}) async {
+  /// [encryption] 显式指定本次加密方式；不传时读 `app_meta` 策略（缺省 device）。
+  /// [passphrase] 仅口令模式需要，**绝不持久化**：自动备份 / 回滚点这类
+  /// 无人值守动作一律强制退回设备密钥，否则它们会因拿不到口令而失败。
+  Future<BackupResult> create({
+    String kind = 'manual',
+    SnapshotKeyMode? encryption,
+    String? passphrase,
+  }) async {
     final c = await _db.database;
+    final mode = await _resolveEncryption(kind, encryption, passphrase);
     final now = nowMs();
     final tables = <String, List<Map<String, dynamic>>>{};
     final counts = <String, int>{};
@@ -232,8 +335,29 @@ class BackupService {
       'files': files,
       'skipped_files': skipped,
     };
+    // checksum 永远算的是**规范化明文 payload**：与是否加密、加密模式无关，
+    // 因此 backup_record 里记录的值在升级前后都可用于交叉校验。
     final checksum = sha256.convert(utf8.encode(_canonical(payload))).toString();
     payload['checksum'] = checksum;
+
+    final jsonBytes = utf8.encode(jsonEncode(payload));
+    final Uint8List output;
+    if (mode == null) {
+      output = Uint8List.fromList(jsonBytes);
+    } else {
+      final deviceKey = await _keyStore.deviceKey();
+      try {
+        output = _cipher.encrypt(
+          plaintext: Uint8List.fromList(jsonBytes),
+          mode: mode,
+          deviceKey: deviceKey,
+          passphrase: passphrase,
+        );
+      } on SnapshotCipherException catch (e) {
+        // 加密失败绝不降级写明文：那会在用户以为「已加密」时泄漏聊天记录。
+        throw BackupFormatException('快照加密失败：${e.message}');
+      }
+    }
 
     await backupDir.create(recursive: true);
     final seq = _seq++;
@@ -242,10 +366,11 @@ class BackupService {
         .toIso8601String()
         .replaceAll(RegExp(r'[-:T.]'), '')
         .substring(0, 14);
-    final fileName = 'backup_${kind}_${stamp}_${now}_$seq.json';
+    final ext = mode == null ? 'json' : snapshotEncryptedExtension;
+    final fileName = 'backup_${kind}_${stamp}_${now}_$seq.$ext';
     final target = fileOf(fileName);
     final tmp = File('${target.path}.tmp');
-    await tmp.writeAsString(jsonEncode(payload), flush: true);
+    await tmp.writeAsBytes(output, flush: true);
     await tmp.rename(target.path);
     final size = await target.length();
 
@@ -269,7 +394,8 @@ class BackupService {
         scope: 'backup',
         action: 'create',
         refId: id,
-        detail: '$kind / ${counts.values.fold(0, (a, b) => a + b)} rows');
+        detail: '$kind / ${counts.values.fold(0, (a, b) => a + b)} rows / '
+            '${mode == null ? 'plain' : mode.storageKey}');
     await prune();
 
     return BackupResult(
@@ -315,13 +441,30 @@ class BackupService {
     }).toList();
   }
 
-  /// 读盘并完整校验。任何异常都抛 [BackupFormatException]，调用方据此拒绝恢复。
-  Future<Map<String, dynamic>> verifyPath(String path) async {
+  /// 读盘并完整校验。密文容器先做 AES-GCM 认证解密，旧明文 JSON 走兼容分支。
+  /// 任何异常都抛 [BackupFormatException]，调用方据此拒绝恢复。
+  Future<Map<String, dynamic>> verifyPath(String path,
+      {String? passphrase}) async {
     final f = File(path);
     if (!f.existsSync()) throw const BackupFormatException('文件不存在');
     Map<String, dynamic> data;
     try {
-      data = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      final bytes = await f.readAsBytes();
+      final String raw;
+      if (SnapshotCipher.isEncrypted(bytes)) {
+        final deviceKey = await _keyStore.deviceKey();
+        final plain = _cipher.decrypt(
+          sealed: bytes,
+          deviceKey: deviceKey,
+          passphrase: passphrase,
+        );
+        raw = utf8.decode(plain);
+      } else {
+        raw = utf8.decode(bytes);
+      }
+      data = jsonDecode(raw) as Map<String, dynamic>;
+    } on SnapshotCipherException catch (e) {
+      throw BackupFormatException(e.message);
     } catch (_) {
       throw const BackupFormatException('不是合法的 JSON 快照');
     }
@@ -378,10 +521,11 @@ class BackupService {
     return data;
   }
 
-  Future<void> verify(String id) async {
+  Future<void> verify(String id, {String? passphrase}) async {
     final info = (await list()).where((e) => e.id == id).toList();
     if (info.isEmpty) throw const BackupFormatException('备份记录不存在');
-    final data = await verifyPath(fileOf(info.first.fileName).path);
+    final data = await verifyPath(fileOf(info.first.fileName).path,
+        passphrase: passphrase);
     final recorded = info.first.checksum;
     if (data['checksum'] != recorded) {
       throw const BackupFormatException('与索引记录不一致');
@@ -412,7 +556,9 @@ class BackupService {
       if (await backupDir.exists()) {
         for (final entity in backupDir.listSync()) {
           if (entity is File &&
-              (entity.path.endsWith('.json') || entity.path.endsWith('.tmp'))) {
+              (entity.path.endsWith('.json') ||
+                  entity.path.endsWith('.$snapshotEncryptedExtension') ||
+                  entity.path.endsWith('.tmp'))) {
             await entity.delete();
           }
         }
@@ -458,6 +604,7 @@ class BackupService {
   Future<RestoreResult> restore(
     String id, {
     RestoreMode mode = RestoreMode.replace,
+    String? passphrase,
   }) async {
     final listAll = await list();
     final matched = listAll.where((e) => e.id == id).toList();
@@ -466,9 +613,43 @@ class BackupService {
     }
     final info = matched.first;
     // 校验必须在任何写操作之前完成：坏快照绝不能碰现有数据。
-    final data = await verifyPath(fileOf(info.fileName).path);
+    final data = await verifyPath(fileOf(info.fileName).path,
+        passphrase: passphrase);
+    return _applyRestore(data, id, mode);
+  }
 
+  /// 从任意路径导入快照（跨设备口令归档 / 用户自己复制进来的 .aicbak）。
+  /// 与 [restore] 共用同一套校验、回滚点与事务逻辑，不留第二份实现。
+  Future<RestoreResult> restoreFromPath(
+    String path, {
+    RestoreMode mode = RestoreMode.replace,
+    String? passphrase,
+  }) async {
+    final data = await verifyPath(path, passphrase: passphrase);
+    return _applyRestore(data, p.basename(path), mode);
+  }
+
+  /// 不解密地探测文件是否为口令加密容器，供 UI 提前弹出输入框。
+  Future<SnapshotEnvelope?> inspectPath(String path) async {
+    final f = File(path);
+    if (!f.existsSync()) return null;
+    try {
+      final bytes = await f.readAsBytes();
+      return SnapshotCipher.isEncrypted(bytes)
+          ? SnapshotCipher.inspect(bytes)
+          : null;
+    } on SnapshotCipherException {
+      return null;
+    }
+  }
+
+  Future<RestoreResult> _applyRestore(
+    Map<String, dynamic> data,
+    String refId,
+    RestoreMode mode,
+  ) async {
     // 回滚点：先把「当前」状态完整存下来，哪怕用户误选了旧备份也能退回。
+    // 无人值守动作一律用设备密钥，绝不会因为「没有口令」而卡住恢复。
     final rollback = await create(kind: 'pre_restore');
 
     final c = await _db.database;
@@ -480,6 +661,8 @@ class BackupService {
       metaKeyAutoBackupEnabled,
       metaKeyAutoBackupIntervalHours,
       metaKeyRetentionDays,
+      metaKeySnapshotEncryption,
+      metaKeySnapshotPassphraseVerifier,
       metaKeySeed,
       metaKeyFts,
     ];
@@ -590,7 +773,7 @@ class BackupService {
     await recordAudit(c,
         scope: 'backup',
         action: 'restore',
-        refId: id,
+        refId: refId,
         detail: '${mode.name} / $rowCount rows / rollback=${rollback.info.id}');
 
     return RestoreResult(

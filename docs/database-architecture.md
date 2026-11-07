@@ -1,8 +1,8 @@
 # 数据库架构文档 · private_ai_companion
 
 > **适用范围**：本地端侧 SQLite 数据库（单库单文件 `companion.db`）。不含云端服务、不含 LLM 权重文件与模型下载缓存。
-> **对应代码基线**：`lib/data/database/schema.dart` (`dbVersion = 5`)、`migrations.dart`、`app_database.dart`、`topic_seed.dart` (`builtinTopicSeedVersion = 3`)。
-> **文档日期**：2026-11-07
+> **对应代码基线**：`lib/data/database/schema.dart` (`dbVersion = 5`)、`migrations.dart`、`app_database.dart`、`topic_seed.dart` (`builtinTopicSeedVersion = 3`)、`core/security/snapshot_cipher.dart` / `snapshot_key_store.dart`、`core/backup/*`。
+> **文档日期**：2026-11-07（同日追加：加密快照正式落地，见 §6.4 / 附录 C）
 > **数据来源**：本文所有表定义逐列对照源码 DDL；所有内容规模数字由 `buildTopicSeeds()` / `storylines` 运行时实测，非估算。
 
 ---
@@ -22,7 +22,8 @@
 | 话题分类 | **178 个**（35 个通用 + 143 个题材小类） |
 | 剧情线 / 节点 | **14 条 / 70 节点** |
 | 快照表白名单 | 33 张（`snapshotTables`） |
-| 加密 | SQLCipher 整库页级加密，密钥存系统安全存储 |
+| 加密 | SQLCipher 整库页级加密，密钥存系统安全存储；**离库快照/导出默认 AES-256-GCM 密文**（§6.4） |
+| 快照加密策略键 | `snapshot_encryption`（`device` / 缺省 = 开；`off` = 明文兼容）、`snapshot_passphrase_verifier` |
 
 ### 1.2 六条设计原则（读代码前先读这段）
 
@@ -44,8 +45,10 @@
 | `topic_genre_library.dart` + `rows/*.dart` | 23 大类 / 143 小类的题材库行数据 |
 | `repositories/*.dart` | 每个领域的查询与写入，屏蔽 SQL |
 | `core/topic/topic_service.dart` | 轮转推荐（去重 / 收藏加权 / 自建加权 / 随机扰动） |
-| `core/backup/backup_service.dart` | 快照、校验、原子恢复、回滚点、媒体内联、轮转清理 |
-| `core/backup/export_service.dart` | 开放格式导出（JSON / CSV，不加密） |
+| `core/backup/backup_service.dart` | 快照、校验、原子恢复、回滚点、媒体内联、轮转清理、**默认加密写入与密文/明文双分支读取** |
+| `core/backup/export_service.dart` | 开放格式导出（JSON / CSV，**默认 `.aicbak` 密文**，显式 `encrypted: false` 才写明文） |
+| `core/security/snapshot_cipher.dart` | AES-256-GCM 容器 v1：magic / AAD / 随机 nonce / tag、HKDF 与 PBKDF2 派生、`inspect()` 免解密读头 |
+| `core/security/snapshot_key_store.dart` | 设备密钥生成/持久化/销毁（`FlutterSecureStorage` → Android Keystore / iOS Keychain / 桌面 DPAPI） |
 
 ---
 
@@ -395,11 +398,12 @@ if current >= builtinTopicSeedVersion and not force: return false   // 幂等
 
 ### 6.1 快照与恢复
 
-- **格式**：单文件 JSON，含 33 张 `snapshotTables` 的全部行 + schema 版本 + 行数统计 + **SHA-256 校验**。
+- **逻辑 payload**：单文件 JSON，含 33 张 `snapshotTables` 的全部行 + schema 版本 + 行数统计 + **SHA-256 校验**（校验和始终按规范化明文 payload 计算，与是否加密无关）。
+- **落盘格式（2026-11-07 起默认密文）**：payload 经 §6.4 的 AES-256-GCM 容器封装后写 `.aicbak`；`snapshot_encryption='off'` 或显式关闭加密时才写回 `.json` 旧格式。`verifyPath()` / `restoreFromPath()` 按 **magic 探测**分流，旧明文快照与回滚点继续可读、可校验、可恢复。
 - **刻意排除**：`backup_record`（本机索引，恢复会错乱）、`audit_log` / `lock_audit`（流水日志，恢复会造成重复审计）、FTS 虚拟表与影子表（由内容表重建）。
 - **媒体文件**：`fileColumns` 声明 7 张表的路径列（`moment.images` 是 JSON 数组，按子串替换），导出时把路径替换成占位符并把文件内联进快照，恢复时重新落盘并回写路径。
-- **原子恢复**：事务内完成；恢复前自动生成 `kind='pre_restore'` 回滚点；失败整体回滚。
-- **清理**：按类型轮转，避免备份文件无限增长。
+- **原子恢复**：事务内完成；恢复前自动生成 `kind='pre_restore'` 回滚点（自动动作强制使用设备密钥，不依赖口令）；失败整体回滚。
+- **清理**：按类型轮转，避免备份文件无限增长；`deleteAll()` 同时覆盖 `.json` / `.aicbak` / `.tmp`。
 - **自动备份**：默认开启 / 24h；距上次超过间隔**且期间有新消息**才生成备份（空库重复启动不刷屏）。
 
 ### 6.2 数据策略（v3 补齐，全部存 `app_meta`，零 schema 变更）
@@ -409,7 +413,10 @@ if current >= builtinTopicSeedVersion and not force: return false   // 幂等
 | 自动备份开关 + 间隔 | `setAutoBackupEnabled` / `setAutoBackupIntervalHours` | 缺省开启 / 24h |
 | 数据留存 | `purgeOldMessages({force})` 硬删 `message` 早于 cutoff 的行 | `0` = 永久保留；`kMinRetentionDays=7` 下限；24h 节流；UI「立即清理」可 force；失败只降级 |
 | 空间占用分析 | `storageBreakdown()` | `dbstat` 优先，行数估算兜底 |
-| 开放格式导出 | `ExportService.exportChats(json\|csv)` | 不加密、人类可读，落 `exports/`，便于用户迁移与自持 |
+| 快照加密开关 | `snapshotEncryptionEnabled()` / `setSnapshotEncryption()` | 缺省（键不存在）视为 **开启**；显式写 `'off'` 才降级为明文，避免「升级后老用户突然变明文」 |
+| 归档口令 verifier | `setArchivePassphraseVerifier()` / `checkArchivePassphrase()` | 只存**不可逆派生校验值**；口令不落库、不进日志、不进快照，忘记后无法找回 |
+| 设备密钥销毁 | `destroySnapshotKey()` | 紧急清空时销毁；此后**此前复制出去的设备加密备份也永久无法解密** |
+| 开放格式导出 | `ExportService.exportChats(format: json\|csv, encrypted: true)` | **默认 AES-256-GCM 密文 `.aicbak`**；明文必须显式 `encrypted: false` 且 UI 二次确认 |
 
 **留存清理的引用安全**：只删 `message` 表。`parent_msg_id` / `memory_vector.source_msg_id` / `plot_edit.message_id` 等引用在 v1 均无真实外键，不会级联崩坏；残留悬空引用由 `health()` 的孤立行巡检照常上报。
 
@@ -426,6 +433,74 @@ weight = (lowReadability ? 45 : 100) + ((行号 * 7) % 23)   // 轻微错位，�
 
 配合 `TopicRepository.query` 的 `ORDER BY weight DESC, id ASC LIMIT 400`：高质量内容 1294 条 > 400，**推荐位全部由可直接发送的完整开场白占据**；低可读性行不删除、不停用，仍可被搜索、分类浏览与池子补齐命中，只是不再抢推荐位。升版时 `weight` 随内容字段一起 UPDATE 下发到老设备。
 
+### 6.4 加密快照容器 v1（2026-11-07 正式落地）
+
+#### 6.4.1 为什么单独做一套，而不是复用 `CryptoService`
+
+`CryptoService` 是 SHA-256 派生密钥流 XOR + HMAC 的轻量隐私加密，服务于**留在库内**的档案锁与深层日记。归档快照/导出文件会离开 App 私有目录、被复制到网盘或另一台设备，威胁模型不同：必须同时有**机密性**与**强篡改检测**，且不能依赖「文件仍在本机」这一前提。因此改用标准 **AES-256-GCM AEAD**（`pointycastle` 纯 Dart 实现，无新增原生库、不增 APK 原生体积）。`CryptoService` 保持原样，两者用途隔离、密钥不共用。
+
+#### 6.4.2 容器布局（`snapshot_cipher.dart`，全小端，44 字节固定头）
+
+| 偏移 | 长度 | 字段 | 说明 |
+|---|---|---|---|
+| 0..5 | 6 | magic `AICENC` | 以非 JSON 起始字节开头，靠**内容探测**而非扩展名区分密文/旧明文 |
+| 6 | 1 | version = 1 | 结构变更必须递增并保留旧版读取 |
+| 7 | 1 | mode | `1` = device，`2` = passphrase |
+| 8..11 | 4 | iterations | PBKDF2 轮数；device 模式为 0 |
+| 12..27 | 16 | salt | 设备密钥 HKDF / 口令 PBKDF2 共用 |
+| 28..39 | 12 | nonce | 每次加密重新随机，绝不复用 |
+| 40..43 | 4 | ciphertext length | uint32；避免 dart2js 不支持 `getUint64` |
+| 44.. | n+16 | ciphertext ‖ GCM tag | tag 16 字节 |
+
+**整个 44 字节头作为 GCM 的 AAD**：mode / 迭代数 / salt / nonce / 长度任何一处被改动都会导致 tag 校验失败，杜绝「把口令加密降级成设备加密」「调低 PBKDF2 轮数」这类降级攻击。解密前先按头里声明的长度与 `maxPlainBytes = 64MB` 校验再分配缓冲区，挡住超大密文 OOM。
+
+> 实现坑：`pointycastle` 的 `AEADParameters.macSize` 单位是 **bit**（内部再 /8），传 `16` 会被判非法；16 字节 tag 必须传 `tagLength * 8 = 128`。
+
+#### 6.4.3 密钥体系（`snapshot_key_store.dart`）
+
+| 模式 | 派生 | 密钥材料 | 适用 | 跨设备 |
+|---|---|---|---|---|
+| `device` | HKDF-SHA256(deviceKey, salt, info=`private_ai_companion.snapshot.v1`) | 32B 随机数存 `FlutterSecureStorage` alias `companion.snapshot.key.v1` → Android Keystore / iOS Keychain / 桌面 DPAPI | 自动备份、回滚点、默认手动备份、默认聊天导出 | ❌ 换设备不可解密 |
+| `passphrase` | PBKDF2-HMAC-SHA256(口令, salt, 60000 轮，头内可平滑提高) | 用户口令，仅存在于本进程内存 | 「口令归档」人工生成的可携带快照 | ✅ 只需口令 |
+
+口令**不落库、不进日志、不进快照**；`app_meta.snapshot_passphrase_verifier` 只写不可逆派生校验值，用于 UI 校验「是否输入了同一个口令」，无法反推口令。测试用 `StaticSnapshotKeyStore` 注入，不触碰插件通道。
+
+#### 6.4.4 调用链与策略
+
+```
+BackupService.create(kind, encryption?, passphrase?)
+  └─ _resolveEncryption(kind, encryption, passphrase)
+       ├─ 自动备份 / pre_restore 回滚点 → 强制 device（无人值守动作不依赖口令）
+       ├─ 显式 encryption == null 且策略 off → 明文 JSON（兼容分支）
+       └─ 其余 → device；指定 passphrase 模式 → 口令归档
+  └─ 规范化 JSON（SHA-256 checksum）→ SnapshotCipher.encrypt → .aicbak
+
+BackupService.verifyPath / restoreFromPath / verify / restore
+  └─ SnapshotCipher.isEncrypted(bytes) ? decrypt(...) : 旧明文分支
+       └─ inspect() 读头 → needsPassphrase → UI 弹口令输入
+
+ExportService.exportChats(format, encrypted: true, mode, passphrase?)
+  └─ 流式逐会话写 tmp → _seal() 整体加密覆盖 tmp → 原子 rename 为 _json.aicbak / _csv.aicbak
+```
+
+- 文件命名：`backup_<kind>_<stamp>_<now>_<seq>.aicbak`（明文为 `.json`）；导出文件保留内部格式后缀 `companion_chat_export_..._json.aicbak`，解密后按后缀决定 JSON/CSV 解析。
+- 导出密文上限 `maxEncryptedExportBytes = 32MB`；`readExport()` 自动识别密文并解密，`_isExportFile()` 同时识别 `.aicbak`。
+- 策略键缺省视为**开启**：老用户升级后不会突然退化成明文；只有显式 `setSnapshotEncryption(false)` 写 `'off'` 才降级。
+- 紧急清空链路：`BackupService.deleteAll()` → `destroySnapshotKey()` → `ExportService.deleteAll()` → `AppDatabase.wipeAll()`。销毁设备密钥后，本机及此前复制出去的设备加密备份**永久不可解密**，UI 已明确告知。
+
+#### 6.4.5 诚实边界
+
+- 加密保护的是**离开 App 私有目录的文件**；数据库本体仍由 SQLCipher 页级加密负责，两套密钥互不相干。
+- `device` 模式无法跨设备恢复，这是刻意取舍；跨设备请用「口令归档」，口令丢失无任何找回途径。
+- 明文兼容分支仍然保留（读旧快照 + 显式关闭加密），UI 对「关闭加密」和「明文导出」都做二次确认并写明泄漏风险。
+- 未接系统级分享（`share_plus` / SAF），加密文件仍需用户自行从文件管理器取走；这属于导出「最后一公里」，不是加密缺口。
+
+#### 6.4.6 回归测试
+
+`test/snapshot_cipher_test.dart`（纯 Dart 容器）：device 往返、旧明文不误判、口令跨设备、错口令/缺口令、错设备密钥、密文 / header / tag 篡改、截断、随机 salt/nonce、非法输入、密钥用途隔离。
+
+`test/encrypted_snapshot_test.dart`（真 SQLite + 真实 AES-GCM）：默认密文快照、磁盘无明文、篡改拒绝、加密恢复、密文回滚点、跨设备口令归档、verifier 不存口令、关闭加密兼容、策略不回退、自动备份设备密钥、清空备份销毁 key、导出默认加密 / 显式明文、口令导出校验。既有 `backup_service_test.dart` / `backup_hardening_test.dart` / `db_policies_test.dart` 固定 `snapshot_encryption='off'`，专门守住旧明文兼容分支。
+
 ---
 
 ## 7. 差距审计
@@ -436,7 +511,7 @@ weight = (lowReadability ? 45 : 100) + ((行号 * 7) % 23)   // 轻微错位，�
 |---|---|---|
 | **足够的剧情向话题** | 2758 条 story；143 个题材小类（23 大类）每类 ≥20 条；14 条剧情线 / 70 节点，含 5 字段（开场 / 目标 / 转折 / 后续提示） | ✅ 超额。轮转推荐按角色去重 60 次、收藏与自建加权 |
 | **足够的日常聊天话题** | v2 仅 9/143 个题材小类是 daily，日常向合计 285 条（其中通用 daily 15 类约 105 条）→ **v3 补齐后 513 条**：新增 9 个生活场景分类 + 228 条完整开场白 | ✅ 已补齐（+228 条 / +80%）；这是本次审计发现的最大短板 |
-| **备份用户聊天数据** | SHA-256 快照 + 事务原子恢复 + pre_restore 回滚点 + 媒体内联 + 轮转清理 + 可配置自动备份 + 开放格式导出 | ✅ 生产级，覆盖「可恢复 / 可校验 / 可迁移」三要素 |
+| **备份用户聊天数据** | SHA-256 快照 + **AES-256-GCM 离库加密** + 设备密钥 / 口令归档 + 事务原子恢复 + pre_restore 回滚点 + 媒体内联 + 轮转清理 + 可配置自动备份 + 默认加密开放格式导出 | ✅ 生产级，覆盖「可恢复 / 可校验 / 可迁移 / **可保密**」四要素（见 §6.4） |
 | **市面上常用的 DB 功能** | 见 §7.3 功能矩阵 | ✅ 主流能力齐备；剩余差距见 §7.4 |
 
 ### 7.2 内容质量基线（运行时实测，非估算）
@@ -472,7 +547,11 @@ weight = (lowReadability ? 45 : 100) + ((行号 * 7) % 23)   // 轻微错位，�
 | 数据留存 / 定期清理 | ✅ | `purgeOldMessages()`，节流 + 下限保护 |
 | 自动备份（可配置） | ✅ | `app_meta` 开关 + 间隔 |
 | 快照校验 + 原子恢复 + 回滚点 | ✅ | `BackupService` |
-| 开放格式导出 / 分享 | ⚠️ 部分 | JSON / CSV 导出到文件；**系统分享**未接（无 `share_plus` 依赖，需用户手动取文件） |
+| 离库快照 / 导出加密 | ✅ | AES-256-GCM 容器 v1 + 系统安全存储设备密钥 + PBKDF2 口令归档（§6.4） |
+| 归档口令校验（不可逆 verifier） | ✅ | `snapshot_passphrase_verifier`；口令不落库 |
+| 加密密钥销毁闭环 | ✅ | 紧急清空调用 `destroySnapshotKey()` |
+| 旧明文快照兼容读取 | ✅ | magic 探测双分支，既有测试固定 `'off'` 守护 |
+| 开放格式导出 / 分享 | ⚠️ 部分 | JSON / CSV **默认加密**导出到文件；**系统分享**未接（无 `share_plus` 依赖，需用户手动取文件） |
 | 内容版本化分发 | ✅ | `topic_seed_version` 独立升版 |
 | 云端同步 / 跨设备 | ❌ 无 | 隐私优先 app 的**主动取舍**，非缺陷 |
 | 行级版本 / 增量同步 / 冲突解决 | ❌ 无 | 单机单用户场景不需要 |
@@ -491,6 +570,8 @@ weight = (lowReadability ? 45 : 100) + ((行号 * 7) % 23)   // 轻微错位，�
 | 8 | 无系统级分享 | 导出文件需用户自行取用 | 引入 `share_plus` 后接 `ExportService`，属可选增强 |
 | 9 | 留存清理后残留悬空引用 | `memory_vector.source_msg_id` 等指向已删消息 | `health()` 会上报；如需要可补一次「清理悬空引用」维护任务 |
 
+> **差距销项（2026-11-07）**：此前清单里的「本地加密快照 / 加密导出」已正式实现（§6.4），**不再是差距**。剩余的真实边界是 §6.4.5 的四条：设备模式不跨设备、口令不可找回、明文兼容分支仍需二次确认、系统级分享未接。这些是设计取舍或未接通道，不是加密缺陷。
+
 ### 7.5 内容契约（新增内容必须满足）
 
 由 `test/topic_library_test.dart`、`test/topic_genre_library_test.dart` 守护：
@@ -507,6 +588,8 @@ weight = (lowReadability ? 45 : 100) + ((行号 * 7) % 23)   // 轻微错位，�
 ---
 
 ## 8. 后续路线（按优先级）
+
+> 原列在此处的「本地加密导出」已于 2026-11-07 落地并从路线移除；下表只保留仍未完成项。
 
 | 优先级 | 事项 | 理由 |
 |---|---|---|
@@ -540,4 +623,21 @@ weight = (lowReadability ? 45 : 100) + ((行号 * 7) % 23)   // 轻微错位，�
 | 提交 | 内容 |
 |---|---|
 | `870d75c` | 补齐常用功能：数据留存清理、空间占用分析、可配置自动备份、开放格式导出（`app_meta` 零 schema 变更） |
-| 本次 | 内容精修：9 个新日常分类 + 228 条完整开场白 + 4 条剧情线 + 质量分级权重 + `builtinTopicSeedVersion 2→3`；产出本文档 |
+| `f36572c` | 内容精修：9 个新日常分类 + 228 条完整开场白 + 4 条剧情线 + 质量分级权重 + `builtinTopicSeedVersion 2→3`；产出本文档 |
+| 本次 | 加密快照正式落地：AES-256-GCM 容器 + 设备密钥/口令归档 + 备份/恢复/导出/设置页/紧急清空全链路 + 旧明文兼容 + 回归测试；见 §6.4 / 附录 C |
+
+## 附录 C：加密快照改动索引（2026-11-07）
+
+| 文件 | 变更 |
+|---|---|
+| `pubspec.yaml` / `pubspec.lock` | 新增纯 Dart `pointycastle ^3.9.1`（+ 传递 `convert` / `js`），**无新增原生库** |
+| `core/security/snapshot_cipher.dart` | 新增：容器 v1、AES-256-GCM、HKDF / PBKDF2、`isEncrypted` / `inspect` / `encrypt` / `decrypt` |
+| `core/security/snapshot_key_store.dart` | 新增：`SnapshotKeyStore` 抽象 / `SecureSnapshotKeyStore` / `StaticSnapshotKeyStore` |
+| `data/database/migrations.dart` | 新增 `metaKeySnapshotEncryption` / `metaKeySnapshotPassphraseVerifier`（**零 schema 变更**） |
+| `core/backup/backup_service.dart` | 默认密文写入、magic 双分支读取、`restoreFromPath` / `inspectPath`、策略与密钥 API、`.aicbak` 清理 |
+| `core/backup/export_service.dart` | 默认加密导出、`_seal()`、`readExport()` 自动解密、明文需显式 `encrypted: false` |
+| `app/di.dart` | 备份与导出共享同一 `SecureSnapshotKeyStore` 实例 |
+| `features/settings/backup_page.dart` | 加密开关、加密/明文导出、口令归档、导入快照、按需弹口令 |
+| `features/settings/privacy_page.dart` | 紧急清空销毁设备密钥，并如实告知旧密文不可解 |
+| `test/snapshot_cipher_test.dart` / `test/encrypted_snapshot_test.dart` | 新增容器单测与真 SQLite 集成测试 |
+| `test/backup_service_test.dart` / `backup_hardening_test.dart` / `db_policies_test.dart` | 固定 `'off'`，守护旧明文兼容分支 |

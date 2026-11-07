@@ -138,7 +138,9 @@ class AvatarPainter extends CustomPainter {
     // 2) 相机：绕 Y 旋转 yaw、绕 X 倾斜 pitch，模型整体上移到视口中心
     final cy = math.cos(yaw), sy = math.sin(yaw);
     final cp = math.cos(pitch), sp = math.sin(pitch);
-    const modelCenterY = 1.58;
+    // 外部 VRM 是米制（中心 ~0.8），App 程序化模型中心是 1.58；
+    // 由网格自带，避免把外部模型硬平移到 App 坐标系。
+    final modelCenterY = mesh.centerY;
     final scale =
         math.min(size.width, size.height) / 4.05 * zoom * mesh.frameScale;
     const focal = 5.2;
@@ -175,7 +177,8 @@ class AvatarPainter extends CustomPainter {
         final nl = math.sqrt(nxY * nxY + nyX * nyX + nzX * nzX);
         final inv = nl > 1e-6 ? 1 / nl : 0;
         final diff = (nxY * lightNorm.x + nyX * lightNorm.y + nzX * lightNorm.z) * inv;
-        final shade = (0.62 + 0.38 * (diff * 0.5 + 0.5)).clamp(0.45, 1.0);
+        final shade = _materialShade(
+            0.62 + 0.38 * (diff * 0.5 + 0.5), diff, 0.45);
         var r = colors[v * 4] * shade;
         var g = colors[v * 4 + 1] * shade;
         var b = colors[v * 4 + 2] * shade;
@@ -221,7 +224,8 @@ class AvatarPainter extends CustomPainter {
       final nl = math.sqrt(nxY * nxY + nyX * nyX + nzX * nzX);
       final inv = nl > 1e-6 ? 1 / nl : 0;
       final diff = (nxY * lightNorm.x + nyX * lightNorm.y + nzX * lightNorm.z) * inv;
-      final shade = (0.58 + 0.42 * (diff * 0.5 + 0.5)).clamp(0.42, 1.0);
+      final shade = _materialShade(
+          0.58 + 0.42 * (diff * 0.5 + 0.5), diff, 0.42);
 
       var r = 0.0, g = 0.0, b = 0.0, a = 0.0;
       for (final i in [i0, i1, i2]) {
@@ -308,6 +312,21 @@ class AvatarPainter extends CustomPainter {
     }());
 
     if (atmosphere) _drawAtmosphere(canvas, size);
+  }
+
+  /// 材质感知的光照：外部 VRM 的 MToon 走阶梯明暗、PBR 走近似高光；
+  /// App 程序化模型（toonSteps=0、specular=0）结果与原来逐字节一致。
+  double _materialShade(double raw, double diff, double floor) {
+    var s = raw.clamp(floor, 1.0);
+    if (mesh.toonSteps > 1) {
+      final steps = mesh.toonSteps;
+      s = ((s * steps).roundToDouble() / steps).clamp(floor, 1.0);
+    }
+    if (mesh.specularStrength > 0) {
+      s += math.pow(diff.clamp(0.0, 1.0), 14).toDouble() *
+          mesh.specularStrength;
+    }
+    return s;
   }
 
   void _drawSoft(Canvas canvas, List<Facet> drawList) {

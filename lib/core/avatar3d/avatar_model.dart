@@ -88,6 +88,16 @@ class AvatarMesh {
   /// 写进 GLB extras，回读后悬浮窗与工坊预览保持一致。
   final double frameScale;
 
+  /// 模型绑定姿态的竖直中心。App 程序化模型是 1.58；外部 VRM 多为米制
+  /// （身高约 1.6、中心约 0.8），由 `vrm_codec` 按包围盒计算后写入。
+  final double centerY;
+
+  /// MToon 阶梯光照档数：0 = 平滑 Lambert；≥2 时把漫反射量化成卡通分阶。
+  final int toonSteps;
+
+  /// 近似高光强度，由外部材质的 metallic / roughness 推导（0 = 无高光）。
+  final double specularStrength;
+
   AvatarMesh({
     required this.bones,
     required this.positions,
@@ -102,6 +112,9 @@ class AvatarMesh {
     this.cocoaMotif = false,
     this.warmPalette = false,
     this.frameScale = 1.0,
+    this.centerY = 1.58,
+    this.toonSteps = 0,
+    this.specularStrength = 0.0,
   });
 
   int get vertexCount => positions.length ~/ 3;

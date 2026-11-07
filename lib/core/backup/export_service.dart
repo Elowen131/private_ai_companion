@@ -1,34 +1,55 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:private_ai_companion/core/security/snapshot_cipher.dart';
+import 'package:private_ai_companion/core/security/snapshot_key_store.dart';
 import 'package:private_ai_companion/data/database/app_database.dart';
 
 /// 开放格式导出：把用户的聊天数据导出为人类可读、可移植的文件。
 ///
-/// 与 [BackupService] 的私有快照（含全量表、仅供本机恢复）不同，这里的导出是
-/// **明文、开放格式**，目的是让用户能随时把对话「带走」：用任意文本工具 /
-/// 表格软件打开，或迁移到其它设备/服务。因此不加密、不含媒体二进制。
+/// 与 [BackupService] 的私有快照（含全量表、仅供本机恢复）不同，这里的导出
+/// 目的是让用户能随时把对话「带走」。**默认加密**（PRD 12.2 正式需求）：
+/// 写出后整体套上 AES-256-GCM 容器，设备密钥或用户口令均可，文件落盘即密文。
+/// 需要给表格软件 / 其它服务直接读取时，必须显式传 `encrypted: false`，
+/// UI 会二次确认并提示风险。
 ///
 /// 设计要点（隐私 + 低内存）：
 /// - 直接读库（rawQuery），不依赖各 Repository，保持自包含；
 /// - 发送者名称做可读映射（用户昵称 / 角色名），而非裸 id；
 /// - **流式写出**：逐会话查询、逐会话写盘，峰值内存只等于单个会话的消息量，
 ///   不会把整库消息 + 完整 payload + jsonEncode 结果同时堆在内存里；
+/// - 加密阶段才把落盘的 tmp 读回内存（峰值 ≈ 2× 导出文件），并对超大文件
+///   明确拒绝而不是悄悄 OOM；聊天文本导出通常远小于该上限；
 /// - CSV 中和 `= + - @` 公式前缀并写 UTF-8 BOM（Excel/WPS 中文不乱码）；
 /// - 不导出已删除 / 已撤回消息，不写入设备绝对路径；
 /// - 文件名毫秒级唯一 + 独立 .tmp + 原子 rename，导出后自动轮转（保留最近 5 份）。
 class ExportService {
   final AppDatabase _db;
   final String baseDir;
+  final SnapshotKeyStore _keyStore;
+  final SnapshotCipher _cipher;
 
-  ExportService(this._db, this.baseDir);
+  ExportService(
+    this._db,
+    this.baseDir, {
+    SnapshotKeyStore? keyStore,
+    SnapshotCipher cipher = const SnapshotCipher(),
+  })  : _keyStore = keyStore ??
+            const SecureSnapshotKeyStore(FlutterSecureStorage()),
+        _cipher = cipher;
 
   Directory get exportDir => Directory(p.join(baseDir, 'exports'));
 
   static const String _format = 'private_ai_companion.chat_export';
   static const int _version = 1;
+
+  /// 加密导出上限：超过就明确报错，避免把几十 MB 文本整体读进内存做 GCM。
+  static const int maxEncryptedExportBytes = 32 * 1024 * 1024;
 
   /// 导出文件轮转上限：明文聊天副本属于隐私敏感数据，不让它无限堆积。
   static const int _keepExports = 5;
@@ -40,9 +61,21 @@ class ExportService {
   /// 导出全部会话与消息。
   ///
   /// [format] 为 'json'（嵌套结构，易读）或 'csv'（扁平，便于表格软件）。
+  /// [encrypted] 默认 true：写完后套上 AES-256-GCM 容器；[mode] 为
+  /// [SnapshotKeyMode.passphrase] 时必须传 [passphrase]（口令绝不持久化）。
   /// 返回产物路径与统计；任何数据库查询失败都会抛出，绝不生成「看起来成功」
   /// 的空文件。写入失败抛 [FileSystemException]。
-  Future<ExportResult> exportChats({String format = 'json'}) async {
+  Future<ExportResult> exportChats({
+    String format = 'json',
+    bool encrypted = true,
+    SnapshotKeyMode mode = SnapshotKeyMode.device,
+    String? passphrase,
+  }) async {
+    if (encrypted &&
+        mode == SnapshotKeyMode.passphrase &&
+        (passphrase == null || passphrase.isEmpty)) {
+      throw ArgumentError('口令加密导出需要提供归档口令');
+    }
     final c = await _db.database;
     final now = _now();
 
@@ -83,13 +116,14 @@ class ExportService {
         .replaceAll(RegExp(r'[-:T.]'), '')
         .substring(0, 14);
     final seq = _seq++;
-    var target = File(
-        p.join(exportDir.path, 'companion_chat_export_${stamp}_${now}_$seq.$ext'));
+    final baseName = 'companion_chat_export_${stamp}_${now}_$seq';
+    // 密文也在文件名里保留内部格式（_json / _csv），解密后不用猜。
+    final suffix = encrypted ? '_$ext.aicbak' : '.$ext';
+    var target = File(p.join(exportDir.path, '$baseName$suffix'));
     var collide = 0;
     while (await target.exists()) {
       collide++;
-      target = File(p.join(exportDir.path,
-          'companion_chat_export_${stamp}_${now}_${seq}_$collide.$ext'));
+      target = File(p.join(exportDir.path, '${baseName}_$collide$suffix'));
     }
     // 固定 .tmp 会在并发导出时交错写坏；这里用本次专属的临时文件。
     final tmp = File('${target.path}.$seq.tmp');
@@ -164,6 +198,10 @@ class ExportService {
       await sink.flush();
       await sink.close();
       closed = true;
+      // 先流式落明文 tmp，再整体加密覆盖写回；加密绝不降级成明文。
+      if (encrypted) {
+        await _seal(tmp, mode: mode, passphrase: passphrase);
+      }
       await tmp.rename(target.path);
       await prune();
     } catch (_) {
@@ -187,7 +225,49 @@ class ExportService {
       conversationCount: convRows.length,
       messageCount: messageCount,
       sizeBytes: await target.length(),
+      encrypted: encrypted,
     );
+  }
+
+  /// 把已落盘的明文 tmp 整体加密后覆盖写回。
+  /// 超大文件直接报错并让 catch 删掉 tmp，绝不悄悄写明文或用尽内存。
+  Future<void> _seal(File tmp,
+      {required SnapshotKeyMode mode, String? passphrase}) async {
+    final plain = await tmp.readAsBytes();
+    final limit = math.min(
+        maxEncryptedExportBytes, SnapshotCipher.maxPlainBytes);
+    if (plain.length > limit) {
+      throw StateError('导出文件 ${(plain.length / 1048576).toStringAsFixed(1)} MB '
+          '超过加密上限，请减少导出范围或改用本机加密快照');
+    }
+    final deviceKey = await _keyStore.deviceKey();
+    final Uint8List sealed;
+    try {
+      sealed = _cipher.encrypt(
+        plaintext: plain,
+        mode: mode,
+        deviceKey: deviceKey,
+        passphrase: passphrase,
+      );
+    } on SnapshotCipherException catch (e) {
+      throw StateError('导出加密失败：${e.message}');
+    }
+    await tmp.writeAsBytes(sealed, flush: true);
+  }
+
+  /// 读回导出文件（自动识别密文容器），供预览 / 另存明文副本使用。
+  Future<String> readExport(String path, {String? passphrase}) async {
+    final bytes = await File(path).readAsBytes();
+    if (!SnapshotCipher.isEncrypted(bytes)) {
+      return utf8.decode(bytes, allowMalformed: true);
+    }
+    final deviceKey = await _keyStore.deviceKey();
+    final plain = _cipher.decrypt(
+      sealed: bytes,
+      deviceKey: deviceKey,
+      passphrase: passphrase,
+    );
+    return utf8.decode(plain);
   }
 
   Map<String, dynamic> _messageRow(
@@ -289,7 +369,9 @@ class ExportService {
 
   bool _isExportFile(String name) =>
       name.startsWith('companion_chat_export_') &&
-      (name.endsWith('.json') || name.endsWith('.csv'));
+      (name.endsWith('.json') ||
+          name.endsWith('.csv') ||
+          name.endsWith('.aicbak'));
 }
 
 class ExportResult {
@@ -300,6 +382,9 @@ class ExportResult {
   final int messageCount;
   final int sizeBytes;
 
+  /// false 仅当用户显式要求明文导出；UI 必须同步给出隐私提示。
+  final bool encrypted;
+
   const ExportResult({
     required this.path,
     required this.fileName,
@@ -307,5 +392,6 @@ class ExportResult {
     required this.conversationCount,
     required this.messageCount,
     required this.sizeBytes,
+    required this.encrypted,
   });
 }

@@ -135,7 +135,8 @@ class _EmergencyWipeTile extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          '删除本机所有角色、聊天、记忆、媒体、备份快照与已下载模型（不可恢复）。',
+          '删除本机所有角色、聊天、记忆、媒体、加密/明文备份与导出文件、'
+          '快照加密密钥及已下载模型（不可恢复）。',
           style: TextStyle(
             fontSize: 11.5,
             height: 1.45,
@@ -162,8 +163,9 @@ class _EmergencyWipeTile extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         title: const Text('确认清空？'),
         content: const Text(
-          '将删除本机所有角色、聊天、记忆、媒体、备份快照、明文导出文件与已下载模型，'
-          '且不可恢复。',
+          '将删除本机所有角色、聊天、记忆、媒体、加密与明文备份/导出文件、'
+          '快照加密密钥及已下载模型，且不可恢复。销毁密钥后，此前复制出去的'
+          '加密备份也无法再解密。',
         ),
         actions: [
           TextButton(
@@ -177,14 +179,17 @@ class _EmergencyWipeTile extends StatelessWidget {
     );
     if (ok != true) return;
 
-    // 备份快照与「开放格式导出」的明文聊天副本都属于「全部本地数据」：
-    // 只清库会留下仍可直接打开的完整对话副本，等于清空承诺失效。
+    // 备份快照（现在是密文）与聊天导出副本都属于「全部本地数据」：
+    // 只清库会留下完整对话副本，等于清空承诺失效。
     if (getIt.isRegistered<BackupService>()) {
       await getIt<BackupService>().deleteAll();
+      // 连同设备密钥一起销毁：即使曾有密文被复制出去，也再解不开。
+      await getIt<BackupService>().destroySnapshotKey();
     }
     if (getIt.isRegistered<ExportService>()) {
       await getIt<ExportService>().deleteAll();
     }
+    // 口令派生校验值随整库一起清掉，不留「曾设置过某口令」的痕迹。
     await getIt<AppDatabase>().wipeAll();
     getIt<GroupChatOrchestrator>().reset();
     await getIt<ModelManager>().wipeLocalData();

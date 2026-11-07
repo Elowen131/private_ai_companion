@@ -319,6 +319,9 @@ Uint8List encodeGlb(
         'cocoaMotif': mesh.cocoaMotif,
         'warmPalette': mesh.warmPalette,
         'frameScale': mesh.frameScale,
+        'centerY': mesh.centerY,
+        'toonSteps': mesh.toonSteps,
+        'specularStrength': mesh.specularStrength,
         'vertexCount': mesh.vertexCount,
         'triangleCount': mesh.triangleCount,
         'boneCount': mesh.boneCount,
@@ -588,6 +591,10 @@ GlbAvatar decodeGlb(Uint8List bytes) {
     cocoaMotif: extras['cocoaMotif'] == true,
     warmPalette: extras['warmPalette'] == true,
     frameScale: (extras['frameScale'] as num?)?.toDouble() ?? 1.0,
+    centerY: (extras['centerY'] as num?)?.toDouble() ?? 1.58,
+    toonSteps: (extras['toonSteps'] as num?)?.toInt() ?? 0,
+    specularStrength:
+        (extras['specularStrength'] as num?)?.toDouble() ?? 0.0,
   );
   mesh.computeBindMatrices();
 

@@ -92,6 +92,8 @@ void main() {
   // ---------- 3) 自动备份水位（不再只看 message） ----------
   print('[3] autoBackupIfNeeded');
   final svc = BackupService(db, baseDir);
+  // 保留原有「明文快照」契约断言；加密路径另由 encrypted_snapshot_test 覆盖。
+  await setMeta(c, metaKeySnapshotEncryption, 'off');
   await setMeta(c, metaKeyLastAutoBackup, '1');
   final auto1 = await svc.autoBackupIfNeeded();
   check(auto1 != null || (await getMeta(c, metaKeyLastBackupFingerprint)) != null,
@@ -135,7 +137,7 @@ void main() {
     ..['content'] = '=1+1'
     ..['media_path'] = '/data/user/0/com.app/files/media/a.png');
   final ex = ExportService(db, baseDir);
-  final jr = await ex.exportChats(format: 'json');
+  final jr = await ex.exportChats(format: 'json', encrypted: false);
   final decoded = jsonDecode(await File(jr.path).readAsString()) as Map;
   // 有效消息仅有 m_new（m_old 已被留存清理删除）与 m_ok。
   check(decoded['message_count'] == 2, 'JSON 导出条数正确（排除删除/撤回）');
@@ -150,7 +152,7 @@ void main() {
       .firstWhere((m) => m['content'] == '=1+1');
   check(okMsg['media_path'] == 'a.png', '导出不含设备绝对路径');
 
-  final cr = await ex.exportChats(format: 'csv');
+  final cr = await ex.exportChats(format: 'csv', encrypted: false);
   final csvText = await File(cr.path).readAsString();
   final csvBytes = await File(cr.path).readAsBytes();
   check(csvBytes.length >= 3 &&
@@ -162,7 +164,7 @@ void main() {
   check(!csvText.contains('已撤回'), 'CSV 不含已撤回消息');
 
   for (var i = 0; i < 8; i++) {
-    await ex.exportChats(format: 'json');
+    await ex.exportChats(format: 'json', encrypted: false);
   }
   final left = ex.exportDir
       .listSync()

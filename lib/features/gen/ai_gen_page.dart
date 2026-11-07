@@ -17,7 +17,7 @@ import 'package:private_ai_companion/data/repositories/generated_media_repositor
 /// ② 提交提示词后与角色生成 AI 图片 / 视频；
 /// ③ **一键在 App 内生成真实 3D 模型**：从人设卡构建带骨骼的 Q 版网格，
 ///    导出标准 glTF 2.0 `.glb`（含 skin + 骨骼动画）落盘，页面内真 3D 预览，
-///    并可一键应用为桌面悬浮窗形象；也支持导入外部 .glb。
+///    并可一键应用为桌面悬浮窗形象；也支持导入外部 .vrm / .glb 真网格。
 ///
 /// 诚实边界：图片 / 视频的端侧扩散管线尚未接入，产出为占位路径并明确标注；
 /// 3D 模型是**真实文件**，可用 Blender / Windows 3D 查看器 / model-viewer 打开。
@@ -172,11 +172,11 @@ class _AiGenPageState extends State<AiGenPage> {
     }
   }
 
-  /// 导入外部 GLB（也支持把 App 生成的文件重新载入）。
+  /// 导入外部 VRM / GLB 真网格（也支持把 App 生成的文件重新载入）。
   Future<void> _importGlb() async {
     final path = _modelPathCtl.text.trim();
     if (path.isEmpty) {
-      _toast('请填写 .glb 文件路径');
+      _toast('请填写 .glb / .vrm 模型文件的绝对路径');
       return;
     }
     setState(() => _busy = true);
@@ -184,7 +184,10 @@ class _AiGenPageState extends State<AiGenPage> {
       final avatar = await _avatarService.importGlb(path);
       if (!mounted) return;
       setState(() => _avatar = avatar);
-      _toast('已载入模型：${avatar.mesh.boneCount} 骨骼');
+      final brief = avatar.notes.take(2).join('；');
+      _toast('已载入：${avatar.mesh.triangleCount} 面 / '
+          '${avatar.mesh.boneCount} 骨骼'
+          '${brief.isEmpty ? '' : '\n$brief'}');
     } catch (e) {
       _toast('载入失败：$e');
     } finally {
@@ -392,7 +395,7 @@ class _AiGenPageState extends State<AiGenPage> {
           TextField(
             controller: _modelPathCtl,
             decoration: const InputDecoration(
-              hintText: '（可选）重新导入本 App 生成的 .glb 绝对路径',
+              hintText: '（可选）导入外部 .vrm / .glb 真网格的绝对路径',
               border: OutlineInputBorder(),
               isDense: true,
             ),
@@ -402,7 +405,7 @@ class _AiGenPageState extends State<AiGenPage> {
             alignment: Alignment.centerLeft,
             child: OutlinedButton.icon(
               icon: const Icon(Icons.file_open_outlined),
-              label: const Text('导入 GLB'),
+              label: const Text('导入 VRM / GLB'),
               onPressed: _busy ? null : _importGlb,
             ),
           ),
@@ -421,8 +424,11 @@ class _AiGenPageState extends State<AiGenPage> {
           const SizedBox(height: 12),
           const Text(
             '说明：提示词润色走本地大模型；图片 / 视频仍为占位路径，端侧扩散管线未接入。'
-            '3D 模型由人设卡在端侧离线生成，是带骨骼与动画的标准 .glb 真实文件，'
-            '可直接用于桌面悬浮窗或导出；「照片→扫描重建」不在本功能范围内。',
+            '3D 模型由人设卡在端侧离线生成，是带骨骼与动画的标准 .glb 真实文件。'
+            '也支持导入外部 VRM 1.0 / 0.x / glTF 2.0 真网格：人形骨骼会重定向到'
+            '本 App 动画骨架，PBR/MToon 材质烘焙进顶点色，高模自动降面以保 30fps。'
+            '模型按需导入、只读引用路径，绝不打进安装包；'
+            '「照片→扫描重建」不在本功能范围内。',
             style: TextStyle(fontSize: 12, color: Colors.grey),
           ),
         ],

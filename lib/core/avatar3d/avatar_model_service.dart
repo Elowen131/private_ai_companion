@@ -8,6 +8,8 @@ import 'avatar_model.dart';
 import 'avatar_tuning.dart';
 import 'chibi_builder.dart';
 import 'glb_codec.dart';
+import 'vrm_codec.dart';
+import 'vrm_import_service.dart';
 import 'package:private_ai_companion/core/desktop/persona_visual_spec.dart';
 
 /// 一次「App 内生成 3D 模型」的结果。
@@ -22,6 +24,13 @@ class GeneratedAvatar {
   /// 生成这个模型所用的造型参数（三风格 + 逐部位微调 + 照片配色）。
   final AvatarTuning? tuning;
 
+  /// 外部 VRM/glTF 导入时的处理说明（骨骼重定向、面数简化、贴图回退等）。
+  /// App 内生成的模型为空列表。
+  final List<String> notes;
+
+  /// 源网格三角形数（简化前）。与 [triangleCount] 对比即可知道是否降面。
+  final int sourceTriangles;
+
   AvatarStyle get style => tuning?.style ?? AvatarStyle.chibi;
 
   const GeneratedAvatar({
@@ -31,6 +40,8 @@ class GeneratedAvatar {
     required this.spec,
     required this.createdAt,
     this.tuning,
+    this.notes = const <String>[],
+    this.sourceTriangles = 0,
   });
 
   int get vertexCount => mesh.vertexCount;
@@ -171,7 +182,13 @@ class AvatarModelService {
     return latest;
   }
 
-  /// 导入外部 GLB（App 内已生成的文件也可再导入）。失败抛 FormatException。
+  /// 导入 `.glb` / `.vrm`（App 内生成的文件也可再导入）。
+  ///
+  /// 两条路径：
+  /// 1. App 自己导出的模型（22 骨骼 + 人设指纹）→ 原样严格校验后载入；
+  /// 2. **外部 VRM / glTF 真网格** → 由 `VrmImportService` 做人形骨骼
+  ///    重定向、材质烘焙与面数简化后载入，不再硬性拒绝非 22 骨骼模型。
+  /// 模型只读引用原路径、不复制大文件，也不打进安装包（PRD 11.3 按需导入）。
   Future<GeneratedAvatar> importGlb(String path) async {
     final file = File(path);
     if (!await file.exists()) {
@@ -179,24 +196,53 @@ class AvatarModelService {
     }
     final bytes = await file.readAsBytes();
     if (bytes.isEmpty) throw ArgumentError('模型文件为空：$path');
-    final decoded = decodeGlb(bytes);
-    // 动画器按固定的 22 根人设骨骼驱动；外部模型若骨骼数不同会越界，
-    // 且没有人设元数据就不能保证「不脱离人设」，这里明确拒绝而不是崩在渲染时。
-    if (decoded.mesh.boneCount != AvatarBones.count) {
-      throw FormatException(
-          '模型骨骼数为 ${decoded.mesh.boneCount}，需要本 App 生成的 22 骨骼模型');
+
+    try {
+      final own = decodeGlb(bytes);
+      if (own.mesh.boneCount == AvatarBones.count &&
+          own.spec.fingerprint.isNotEmpty) {
+        own.mesh.computeBindMatrices();
+        return GeneratedAvatar(
+          filePath: file.absolute.path,
+          bytes: bytes.length,
+          mesh: own.mesh,
+          spec: own.spec,
+          tuning: own.tuning,
+          createdAt: DateTime.now(),
+          sourceTriangles: own.mesh.triangleCount,
+        );
+      }
+    } catch (_) {
+      // 外部模型的 JSON 结构不同（多 primitive / 无 skin / 扩展字段），
+      // 专用解析器可能抛任意类型异常；一律回退到通用 VRM/glTF 解析器，
+      // 由它给出准确的错误信息，而不是把兼容问题伪造成「文件损坏」。
     }
-    if (decoded.spec.fingerprint.isEmpty) {
-      throw const FormatException('模型缺少人设元数据，无法确认与当前角色一致');
-    }
-    decoded.mesh.computeBindMatrices();
+
+    final result = await const VrmImportService().importBytes(bytes);
+    final d = result.decoded;
+    final notes = <String>[
+      switch (d.dialect) {
+        VrmDialect.vrm1 => 'VRM 1.0 人形骨骼已重定向到 App 动画骨架',
+        VrmDialect.vrm0 => 'VRM 0.x 人形骨骼已重定向到 App 动画骨架',
+        VrmDialect.plainGltf => '标准 glTF 2.0 真网格',
+      },
+      if (d.skinned)
+        '骨骼动画由 App 动画器实时驱动（${AvatarBones.count} 骨骼）'
+      else
+        '静态网格：可旋转查看，无骨骼动画',
+      if (d.simplified)
+        '面数 ${d.originalTriangles} → ${d.finalTriangles}（端侧 30fps 预算）',
+      ...d.warnings,
+    ];
     return GeneratedAvatar(
       filePath: file.absolute.path,
       bytes: bytes.length,
-      mesh: decoded.mesh,
-      spec: decoded.spec,
-      tuning: decoded.tuning,
+      mesh: result.avatar.mesh,
+      spec: result.avatar.spec,
+      tuning: result.avatar.tuning,
       createdAt: DateTime.now(),
+      notes: notes,
+      sourceTriangles: d.originalTriangles,
     );
   }
 

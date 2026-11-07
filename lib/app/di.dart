@@ -24,6 +24,7 @@ import 'package:private_ai_companion/core/world/world_event_service.dart';
 import 'package:private_ai_companion/core/time/age_service.dart';
 import 'package:private_ai_companion/core/security/profile_lock_service.dart';
 import 'package:private_ai_companion/core/security/db_cipher_key.dart';
+import 'package:private_ai_companion/core/security/snapshot_key_store.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:private_ai_companion/core/diary/diary_service.dart';
 import 'package:private_ai_companion/core/plot/plot_edit_service.dart';
@@ -115,9 +116,17 @@ Future<void> setupDependencies() async {
 
   // ---------- 内容库 / 备份（第 20 章）----------
   getIt.registerSingleton<TopicService>(TopicService(getIt(), db));
-  getIt.registerSingleton<BackupService>(BackupService(db, appDir.path));
-  // 开放格式导出（明文、可携带）：与私有加密快照互补，让用户随时带走聊天数据。
-  getIt.registerSingleton<ExportService>(ExportService(db, appDir.path));
+  // 备份与导出共享同一枚设备密钥（系统安全存储，首次使用时才生成），
+  // 保证任一处写出的密文都能在另一处解开。
+  const snapshotKeys = SecureSnapshotKeyStore(FlutterSecureStorage());
+  getIt.registerSingleton<SnapshotKeyStore>(snapshotKeys);
+  getIt.registerSingleton<BackupService>(
+    BackupService(db, appDir.path, keyStore: snapshotKeys),
+  );
+  // 聊天导出默认也是加密容器；用户需要可读文件时显式选择明文导出。
+  getIt.registerSingleton<ExportService>(
+    ExportService(db, appDir.path, keyStore: snapshotKeys),
+  );
 
   // ---------- 推理抽象层：端侧优先 → Mock 兜底 ----------
   // 活跃 provider 是 FallbackLlmProvider：先尝试 LocalLlmProvider（llamadart 端侧），

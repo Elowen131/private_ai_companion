@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/core/backup/backup_service.dart';
 import 'package:private_ai_companion/core/backup/export_service.dart';
+import 'package:private_ai_companion/core/security/snapshot_cipher.dart';
 import 'package:private_ai_companion/data/database/app_database.dart';
 import 'package:private_ai_companion/features/settings/topic_library_page.dart';
 
@@ -32,6 +33,8 @@ class _BackupPageState extends State<BackupPage> {
   bool _autoBackup = true;
   int _autoInterval = 24;
   int _retention = 0;
+  bool _encrypted = true;
+  bool _hasPassphrase = false;
 
   @override
   void initState() {
@@ -48,6 +51,8 @@ class _BackupPageState extends State<BackupPage> {
       final autoBackup = await _db.autoBackupEnabled;
       final autoInterval = await _db.autoBackupIntervalHours;
       final retention = await _db.retentionDays;
+      final encrypted = await _svc.snapshotEncryptionEnabled();
+      final hasPassphrase = await _svc.hasArchivePassphrase();
       if (mounted) {
         setState(() {
           _health = health;
@@ -56,6 +61,8 @@ class _BackupPageState extends State<BackupPage> {
           _autoBackup = autoBackup;
           _autoInterval = autoInterval;
           _retention = retention;
+          _encrypted = encrypted;
+          _hasPassphrase = hasPassphrase;
         });
       }
     } catch (_) {}
@@ -92,6 +99,12 @@ class _BackupPageState extends State<BackupPage> {
   }
 
   Future<void> _restore(BackupInfo info) async {
+    String? passphrase;
+    if (await _needsPassphrase(_svc.fileOf(info.fileName).path)) {
+      passphrase = await _askPassphrase('这份归档使用口令加密');
+      if (passphrase == null) return;
+    }
+    if (!mounted) return;
     final mode = await showDialog<RestoreMode>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -116,7 +129,8 @@ class _BackupPageState extends State<BackupPage> {
     if (mode == null) return;
     setState(() => _busy = true);
     try {
-      final r = await _svc.restore(info.id, mode: mode);
+      final r = await _svc.restore(info.id,
+          mode: mode, passphrase: passphrase);
       _toast('已恢复 ${r.rowCount} 行、${r.fileCount} 个媒体文件；'
           '回滚点 ${r.rollbackBackupId}'
           '${r.warnings.isEmpty ? '' : '（${r.warnings.length} 条提示）'}');
@@ -165,21 +179,228 @@ class _BackupPageState extends State<BackupPage> {
     await _reload();
   }
 
-  Future<void> _exportChats() async {
+  Future<void> _exportChats({bool encrypted = true}) async {
     final svc = _export;
     if (svc == null) {
       _toast('导出服务未就绪');
       return;
     }
+    if (!encrypted) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('导出明文聊天？'),
+          content: const Text(
+            '明文文件包含完整对话内容，任何拿到文件的人都能直接阅读。'
+            '建议保持默认加密导出，仅在确实需要用文本/表格工具打开时选择明文。',
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('仍要导出')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
     setState(() => _busy = true);
     try {
-      final r = await svc.exportChats(format: 'json');
-      _toast('已导出 ${r.conversationCount} 段对话、'
-          '${r.messageCount} 条消息\n文件名：${r.fileName}');
+      final r = await svc.exportChats(format: 'json', encrypted: encrypted);
+      _toast('已导出 ${r.conversationCount} 段对话、${r.messageCount} 条消息'
+          '（${r.encrypted ? 'AES-256-GCM 加密' : '明文'}）\n文件名：${r.fileName}');
     } catch (e) {
       _toast('导出失败：$e');
     }
     if (mounted) setState(() => _busy = false);
+    await _reload();
+  }
+
+  Future<bool> _needsPassphrase(String path) async {
+    try {
+      final env = await _svc.inspectPath(path);
+      return env?.needsPassphrase ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<String?> _askPassphrase(String title) async {
+    final ctrl = TextEditingController();
+    try {
+      final value = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(title),
+          content: TextField(
+            controller: ctrl,
+            obscureText: true,
+            autofocus: true,
+            decoration: const InputDecoration(
+                hintText: '归档口令（忘记后无法解密）'),
+            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('取消')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                child: const Text('确定')),
+          ],
+        ),
+      );
+      return (value == null || value.isEmpty) ? null : value;
+    } finally {
+      ctrl.dispose();
+    }
+  }
+
+  Future<String?> _askPath() async {
+    final ctrl = TextEditingController();
+    try {
+      final value = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('导入加密快照'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('填入 .aicbak / .json 快照的完整路径'
+                  '（例如从另一台设备复制过来的归档）。',
+                  style: TextStyle(fontSize: 12)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(
+                    hintText: '/storage/emulated/0/Download/backup.aicbak'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('取消')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                child: const Text('下一步')),
+          ],
+        ),
+      );
+      final v = value?.trim() ?? '';
+      return v.isEmpty ? null : v;
+    } finally {
+      ctrl.dispose();
+    }
+  }
+
+  Future<void> _setEncryption(bool v) async {
+    if (!v) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('关闭快照加密？'),
+          content: const Text(
+            '关闭后新快照与回滚点会以明文 JSON 写入本机，'
+            '设备被 root / 解锁后可直接读到全部聊天记录。'
+            '仅在与旧版本做兼容排查时建议临时关闭。',
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('确认关闭')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    setState(() => _encrypted = v);
+    try {
+      await _svc.setSnapshotEncryption(v);
+      _toast(v
+          ? '已启用 AES-256-GCM 加密快照'
+          : '已关闭加密：之后生成的快照为明文');
+    } catch (e) {
+      _toast('设置失败：$e');
+    }
+    await _reload();
+  }
+
+  /// 生成可跨设备解密的口令归档。口令只存在这一次调用里，绝不落库。
+  Future<void> _createPortable() async {
+    final pw = await _askPassphrase('生成口令加密归档');
+    if (pw == null) return;
+    if (pw.length < 8) {
+      _toast('归档口令至少 8 位');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await _svc.setArchivePassphraseVerifier(pw);
+      final r = await _svc.create(
+        encryption: SnapshotKeyMode.passphrase,
+        passphrase: pw,
+      );
+      _toast('已生成口令归档：${r.info.fileName}\n'
+          '路径：${_svc.fileOf(r.info.fileName).path}\n'
+          '复制到其它设备后用同一口令「导入快照」即可恢复');
+    } catch (e) {
+      _toast('归档失败：$e');
+    }
+    if (mounted) setState(() => _busy = false);
+    await _reload();
+  }
+
+  /// 导入外部快照。默认「合并（只补缺）」，绝不因导入而清空现有数据。
+  Future<void> _importSnapshot() async {
+    final path = await _askPath();
+    if (path == null) return;
+    String? pw;
+    if (await _needsPassphrase(path)) {
+      pw = await _askPassphrase('这份归档使用口令加密');
+      if (pw == null) return;
+    }
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导入这份快照？'),
+        content: const Text(
+          '将以「合并（只补缺）」方式导入：只补进缺失记录，不删除现有数据。'
+          '导入前会自动生成回滚点。',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('导入')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      final r = await _svc.restoreFromPath(
+        path,
+        mode: RestoreMode.merge,
+        passphrase: pw,
+      );
+      _toast('已导入 ${r.rowCount} 行、${r.fileCount} 个媒体文件；'
+          '回滚点 ${r.rollbackBackupId}'
+          '${r.warnings.isEmpty ? '' : '（${r.warnings.length} 条提示）'}');
+    } catch (e) {
+      _toast('导入失败：$e');
+    }
+    if (mounted) setState(() => _busy = false);
+    await _reload();
   }
 
   @override
@@ -361,6 +582,19 @@ class _BackupPageState extends State<BackupPage> {
             value: _autoBackup,
             onChanged: _busy ? null : _setAutoBackup,
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('加密快照', style: TextStyle(fontSize: 13)),
+            subtitle: Text(
+              _encrypted
+                  ? 'AES-256-GCM · 设备密钥存系统安全存储'
+                      '${_hasPassphrase ? ' · 已设置归档口令' : ''}'
+                  : '已关闭：新快照为明文，存在泄漏风险',
+              style: const TextStyle(fontSize: 11),
+            ),
+            value: _encrypted,
+            onChanged: _busy ? null : _setEncryption,
+          ),
           Row(
             children: [
               const Text('备份间隔', style: TextStyle(fontSize: 13)),
@@ -419,17 +653,31 @@ class _BackupPageState extends State<BackupPage> {
               ),
               OutlinedButton.icon(
                 icon: const Icon(Icons.upload_outlined, size: 18),
-                label: const Text('导出聊天数据'),
-                onPressed: _busy ? null : _exportChats,
+                label: const Text('加密导出聊天'),
+                onPressed: _busy ? null : () => _exportChats(),
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.key_outlined, size: 18),
+                label: const Text('口令归档'),
+                onPressed: _busy ? null : _createPortable,
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: const Text('导入快照'),
+                onPressed: _busy ? null : _importSnapshot,
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.warning_amber_outlined, size: 16),
+                label: const Text('明文导出'),
+                onPressed: _busy ? null : () => _exportChats(encrypted: false),
               ),
             ],
           ),
           const SizedBox(height: 6),
-          // 诚实标注：当前快照/导出都是本机明文文件（产品方案 12.2 的
-          // 「加密导出」仍列为规划中），避免用户误以为可以随意分享到公网。
           const Text(
-            '导出为明文 JSON，仅保留最近 5 份；备份快照同样是本机明文文件。'
-            '两者均含完整对话内容，请自行保管，不要直接上传到公共网盘。',
+            '新快照与聊天导出默认 AES-256-GCM 加密；「口令归档」生成可跨设备'
+            '解密的文件，口令不落库、忘记后无法找回。明文导出与关闭加密会写入'
+            '完整对话内容，请自行保管，不要上传到公共网盘。',
             style: TextStyle(fontSize: 11),
           ),
         ],

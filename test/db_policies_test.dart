@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:private_ai_companion/core/backup/backup_service.dart';
 import 'package:private_ai_companion/core/backup/export_service.dart';
+import 'package:private_ai_companion/data/database/migrations.dart';
 
 import 'database_fixture.dart';
 
@@ -77,6 +78,8 @@ void main() {
     final base = await tempDir('autobackup_exports');
     final svc = BackupService(db, base.path);
     final c = await db.database;
+    // 明文兼容分支：本用例只验证自动备份水位，不触碰安全存储插件。
+    await setMeta(c, metaKeySnapshotEncryption, 'off');
     await c.insert('user', {'id': 'u1', 'nickname': '我'});
     await c.insert('conversation', _conv('c1'));
     await c.insert('message', _msg('m1', 'c1', content: '一条消息'));
@@ -119,7 +122,7 @@ void main() {
     await c.insert('conversation', _conv('c1', createdAt: 5000));
     await c.insert('message', _msg('m1', 'c1', createdAt: 5000, content: '今天天气真好'));
 
-    final jsonRes = await svc.exportChats(format: 'json');
+    final jsonRes = await svc.exportChats(format: 'json', encrypted: false);
     final jsonFile = File(jsonRes.path);
     expect(await jsonFile.exists(), isTrue);
     final decoded = jsonRes.path.endsWith('.json')
@@ -133,7 +136,7 @@ void main() {
     // 发送者名应翻成角色名而非裸 id。
     expect(conv['messages'].first['sender'], '小满');
 
-    final csvRes = await svc.exportChats(format: 'csv');
+    final csvRes = await svc.exportChats(format: 'csv', encrypted: false);
     final csvText = await File(csvRes.path).readAsString();
     expect(csvText.contains('conversation_id'), isTrue);
     expect(csvText.contains('今天天气真好'), isTrue);
