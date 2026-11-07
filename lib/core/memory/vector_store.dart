@@ -45,26 +45,46 @@ class SqliteVectorStore implements VectorStore {
     bool includeVoided = false,
   }) async {
     final c = await _db.database;
-    final rows = await c.query(
+    // 评分阶段只需要 `id` + `embedding`：记忆的 `content` 可能是很长的文本，
+    // 若随每一行一起SELECT 上来，再被 topK 之外的大多数丢弃，等于为「最终不用」的
+    // 成百上千条记忆同时把长字符串常驻内存——这正是「返回无效数据 / 内存压力」的典型。
+    // 先只取轻量列打分、挑出 topK id，再回表取这 8 条的全行（含 content）。
+    // 相似度数学完全不变，仅延迟了 content 的物化。
+    final scoreRows = await c.query(
       'memory_vector',
+      columns: const ['id', 'embedding'],
       where: 'persona_id = ? ${includeVoided ? '' : 'AND voided = 0'}',
       whereArgs: [personaId],
     );
     final scored = <Map<String, dynamic>>[];
-    for (final r in rows) {
+    for (final r in scoreRows) {
       final emb = (jsonDecode(r['embedding'] as String) as List)
           .map((e) => (e as num).toDouble())
           .toList();
-      final sim = _cosine(query, emb);
-      scored.add({'sim': sim, 'row': r});
+      scored.add({'sim': _cosine(query, emb), 'id': r['id'] as String});
     }
     scored.sort((a, b) => (b['sim'] as double).compareTo(a['sim'] as double));
-    return scored.take(topK).map((e) {
-      final r = e['row'] as Map<String, dynamic>;
+    final top = scored.take(topK).toList();
+    if (top.isEmpty) return const [];
+    final ids = top.map((e) => e['id'] as String).toList();
+    final marks = List.filled(ids.length, '?').join(',');
+    final fullRows = await c.query(
+      'memory_vector',
+      where: 'id IN ($marks)',
+      whereArgs: ids,
+    );
+    final byId = <String, Map<String, dynamic>>{
+      for (final r in fullRows) r['id'] as String: r,
+    };
+    // 按分数降序（top 已是该顺序）还原，保证返回顺序与旧实现一致。
+    final out = <MemoryVector>[];
+    for (final e in top) {
+      final r = byId[e['id'] as String];
+      if (r == null) continue; // 极端竞态下该记忆被删，跳过即可
       final emb = (jsonDecode(r['embedding'] as String) as List)
           .map((x) => (x as num).toDouble())
           .toList();
-      return MemoryVector(
+      out.add(MemoryVector(
         id: r['id'] as String,
         personaId: r['persona_id'] as String,
         content: r['content'] as String,
@@ -72,8 +92,9 @@ class SqliteVectorStore implements VectorStore {
         sourceMsgId: r['source_msg_id'] as String?,
         voided: (r['voided'] as num? ?? 0) == 1,
         createdAt: (r['created_at'] as num? ?? 0).toInt(),
-      );
-    }).toList();
+      ));
+    }
+    return out;
   }
 
   @override
