@@ -452,6 +452,8 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 重发：用户长按自己的消息 → 编辑重发 → 角色遗忘旧回复并重生成。
   Future<void> _resend(Message userMsg) async {
+    // 生成中不允许再触发一条 LLM 调用（重生成会与正在进行的流式回复抢占同一引擎）。
+    if (_generating) return;
     final edited = await _editDialog(userMsg.content);
     if (edited == null || edited.trim().isEmpty) return;
     final resent = await _lifecycle.resendUserMessage(userMsg.id, edited);
@@ -563,6 +565,9 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 剧情推进提示（方案 4.2）。
   Future<void> _showPlotHint() async {
+    // 生成中不允许再触发一条 LLM 调用：既避免与正在进行的流式回复抢占同一引擎
+    // （LocalLlmProvider 已串行化，但会让提示等整段回复结束），也避免无谓等待。
+    if (_generating) return;
     final cid = await _ensureConversation();
     final hint = await _orchestrator.generatePlotHint(
       conversationId: cid,

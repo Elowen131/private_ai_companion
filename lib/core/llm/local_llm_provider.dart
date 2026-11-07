@@ -13,6 +13,7 @@ import 'package:llamadart/llamadart.dart'
 
 import 'types.dart';
 import 'llm_provider.dart';
+import 'async_mutex.dart';
 
 /// 端侧 LLM 实现（方案 9：本地推理底座）。
 ///
@@ -36,6 +37,15 @@ class LocalLlmProvider implements LlmProvider {
   String? _enginePath; // 当前 _engine 实际加载的模型路径，用于检测「换了模型」
   bool _loaded = false;
 
+  /// 推理互斥锁（单飞）。[LocalLlmProvider] 是进程级单例（见 di.dart），
+  /// 同一条 [_engine] 会被 ChatOrchestrator / GroupChatOrchestrator / MediaGenService /
+  /// 剧情提示等多个入口共享；而 llama.cpp 的 [LlamaEngine.create] 是单飞、不可重入，
+  /// 两个并发 create() 会破坏引擎内部状态甚至崩溃。此外 [_ensureEngine] 在模型路径
+  /// 变化时会 dispose 旧引擎——若另一路推理正在进行，就会「推理中途拆引擎」。
+  /// 因此所有真正触碰 [_engine] 的入口（[streamChat] / [unload] / [isReady] 的 dispose 分支）
+  /// 必须在该锁内串行。见 [AsyncMutex] 注释了解实现与「锁跨 yield 持有」语义。
+  final AsyncMutex _mutex = AsyncMutex();
+
   LocalLlmProvider({
     required this.pathResolver,
     this.contextSize = 4096,
@@ -46,7 +56,11 @@ class LocalLlmProvider implements LlmProvider {
   /// 早期实现直接返回 `_loaded`，若没人先调 [load] 会永远返回 false，
   /// 导致已下载模型也被误判为「端侧不可用」而一直走 Mock。
   @override
-  Future<bool> isReady() async => await load();
+  Future<bool> isReady() async {
+    // 经锁：load() 在模型缺失时会 dispose 引擎，必须串行于正在进行的推理，
+    // 否则会在另一路 create() 进行中拆掉它正在用的引擎。
+    return _mutex.run(load);
+  }
 
   /// 解析并校验模型路径；文件存在且非空才视为就绪（原生加载延迟到首次推理）。
   ///
@@ -74,9 +88,12 @@ class LocalLlmProvider implements LlmProvider {
   }
 
   Future<void> unload() async {
-    await _disposeEngine();
-    _resolvedPath = null;
-    _loaded = false;
+    // 必须串行：若此刻正有一路推理在跑，dispose 旧引擎会让它崩溃。
+    await _mutex.run(() async {
+      await _disposeEngine();
+      _resolvedPath = null;
+      _loaded = false;
+    });
   }
 
   Future<void> _disposeEngine() async {
@@ -134,18 +151,21 @@ class LocalLlmProvider implements LlmProvider {
       return;
     }
     // 路径变化（用户换了模型）则重建引擎。
-    final engine = await _ensureEngine(path);
-
-    final messages = request.messages
-        .map(
-          (m) => LlamaChatMessage.fromText(
-            role: _role(m.role),
-            text: m.content,
-          ),
-        )
-        .toList();
-
+    // 锁在整段生成（含流式 yield）期间持有：并发的 streamChat / unload 会排队，
+    // 避免「推理中途拆引擎」或同引擎并发 create()。流被消费完或取消时 finally 释放。
+    final leave = await _mutex.protect();
     try {
+      final engine = await _ensureEngine(path);
+
+      final messages = request.messages
+          .map(
+            (m) => LlamaChatMessage.fromText(
+              role: _role(m.role),
+              text: m.content,
+            ),
+          )
+          .toList();
+
       await for (final chunk in engine.create(
         messages,
         params: GenerationParams(
@@ -164,6 +184,8 @@ class LocalLlmProvider implements LlmProvider {
     } catch (_) {
       // 交由 FallbackLlmProvider 捕获并降级到 Mock，避免对话断流。
       rethrow;
+    } finally {
+      leave();
     }
   }
 

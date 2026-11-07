@@ -157,24 +157,38 @@ class MessageRepository {
     return list.take(limit).toList();
   }
 
-  /// 游标分页（keyset pagination）：用 `created_at < before` 而非 OFFSET，
+  /// 游标分页（keyset pagination）：用组合键 `(created_at, id)` 而非 OFFSET，
   /// 翻页时数据插入不会导致重复/漏条，且能命中 idx_message_conv_time。
+  ///
+  /// 返回列表按时间**升序**（取回后 `.reversed`），因此「上一页的最旧一条」是
+  /// `result.first`——下一次翻页应传 `before = result.first.createdAt`、
+  /// `beforeId = result.first.id`（见 database_v2_test / concurrency_stress_test）。
+  ///
+  /// 用组合键而非仅 `created_at`，避免同一毫秒内两条消息在页边界被 `created_at < before`
+  /// 整组跳过（静默丢历史）。[beforeId] 为空时退化为纯 `created_at < before`，与旧行为一致。
   Future<List<Message>> page(
     String conversationId, {
     int? before,
+    String? beforeId,
     int limit = 30,
   }) async {
     final c = await _db.database;
-    final rows = await c.query(
-      'message',
-      where: before == null
-          ? 'conversation_id = ?'
-          : 'conversation_id = ? AND created_at < ?',
-      whereArgs:
-          before == null ? [conversationId] : [conversationId, before],
-      orderBy: 'created_at DESC, id DESC',
-      limit: limit,
-    );
+    final rows = before == null
+        ? await c.query(
+            'message',
+            where: 'conversation_id = ?',
+            whereArgs: [conversationId],
+            orderBy: 'created_at DESC, id DESC',
+            limit: limit,
+          )
+        : await c.query(
+            'message',
+            where:
+                'conversation_id = ? AND (created_at < ? OR (created_at = ? AND id < ?))',
+            whereArgs: [conversationId, before, before, beforeId ?? ''],
+            orderBy: 'created_at DESC, id DESC',
+            limit: limit,
+          );
     return rows.map(Message.fromMap).toList().reversed.toList();
   }
 
