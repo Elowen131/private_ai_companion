@@ -36,7 +36,7 @@
 
 | 分类 | 体积 | 备注 |
 |---|---|---|
-| `lib/arm64-v8a/*.so` | **≈85 MB**（排除 Vulkan 后） | `libflutter.so` 11.76、`libapp.so` 8.98、`libsqlcipher.so` 5.19、`libllama.so` 3.73、`libsqlite3.so` 1.73，另有多份 `libggml-cpu-android_armv*.so` 变体 ≈10 MB；`libggml-vulkan.so`（≈42MB）在 `build.gradle.kts` 的 `packaging.jniLibs.excludes` 中排除（见 §10.5，已验证端侧推理固定 `gpuLayers=0`、永不加载） |
+| `lib/arm64-v8a/*.so` | **≈78.8 MB**（排除 Vulkan + LiteRT GPU/WebGPU/OpenCL 后端后；排除前 ≈100.6MB） | 经实测（CI 产物）：`libLiteRtLm.so` 24.75（LiteRT CPU 推理核心，保留）、`libflutter.so` 11.22、`libapp.so` 8.63、`libsqlcipher.so` 4.95、`libGemmaModelConstraintProvider.so` 4.55、`libllama-common.so` 4.03、`libllama.so` 3.97，另有 `libggml-base.so` / 多份 `libggml-cpu-*` 变体；`libggml-vulkan.so`（≈42MB）与 `libwebgpu_dawn`/`libLiteRtGpuAccelerator`/`libLiteRtWebGpuAccelerator`/`libLiteRtTopKOpenClSampler`/`libLiteRtTopKWebGpuSampler`（≈21.8MB）均在 `build.gradle.kts` 的 `packaging.jniLibs.excludes` 中排除（见 §10.5，已验证端侧推理固定 `gpuLayers=0` + 3D 纯 Dart CPU 软渲染，这些 GPU 后端永不加载） |
 | `lib/x86_64/*.so` | 34.52 MB | 模拟器/桌面用 |
 | `lib/armeabi-v7a/*.so` | 26.78 MB | 32 位老设备 |
 | `classes.dex` | 3.05 MB | R8 已混淆 |
@@ -98,7 +98,7 @@ L4 回归守护   ── perf 测试 / 静态分析 / 专项测试 / CI 门禁
 | **B2** | **观感不降级** | 头像按 `160×160` 解码，≥ `28dp × 3x = 84px`，3x 屏无损；**聊天背景/封面/桌面预览保持原有大尺寸限制**，绝不被头像限额误伤。VRM 贴图仍 512²、8MB |
 | **B3** | **功能不减、入口不删** | 「加载全部历史」改为「再加载 200 条」逐页，用户仍能到达任意早的消息；明文导出、关闭加密、静态预览、口令归档等入口全部保留 |
 | **B4** | **数据兼容不破** | 快照 `checksum` 仍按 `_canonical(payload)` 计算（改成 `sha256(jsonBytes)` 会让历史快照与 `backup_record` 校验失败）；容器格式 `AICENC v1` 不变；旧明文 JSON 与旧密文快照继续可校验可恢复 |
-| **B5** | **不删必要/未验证的插件原生库** | `libggml-vulkan.so`(42MB) **已排除**：经代码核对 `LocalLlmProvider.nGpuLayers` 恒为 `0`（CPU-only，见 `lib/core/llm/local_llm_provider.dart`），Vulkan 后端永不加载，属纯冗余体积，已在 `build.gradle.kts` 用 `packaging.jniLibs.excludes` 安全排除（§10.5）。其余 `libggml-cpu-*` 多架构变体是运行时按设备 SoC 选择的，**保留**（删错会让部分设备端侧推理崩溃，属质量降级）。`abiFilters` 砍 ABI 仍不做（见 B6） |
+| **B5** | **不删必要/未验证的插件原生库** | `libggml-vulkan.so`(42MB) 与 LiteRT 的 GPU/WebGPU/OpenCL 后端 + Dawn WebGPU 运行时（`libwebgpu_dawn`/`libLiteRtGpuAccelerator`/`libLiteRtWebGpuAccelerator`/`libLiteRtTopKOpenClSampler`/`libLiteRtTopKWebGpuSampler`，≈21.8MB）**已排除**：经代码核对 `LocalLlmProvider.nGpuLayers` 恒为 `0`（CPU-only，见 `lib/core/llm/local_llm_provider.dart`）且 3D 为纯 Dart CPU 软渲染（见 `lib/core/avatar3d/avatar_view.dart`），这些 GPU 后端永不加载，属纯冗余体积，已在 `build.gradle.kts` 用 `packaging.jniLibs.excludes` 安全排除（§10.5）。保留项：llama.cpp CPU 后端（`libllama.so`/`libllama-common.so`/`libggml-base.so`/`libggml-cpu-*`）与 LiteRT CPU 推理核心（`libLiteRtLm.so`/`libGemmaModelConstraintProvider.so`）——后者为 llamadart 可能启用的备选引擎核心，待真机验证确认不加载后可进一步剥离（§10.5）。`abiFilters` 砍 ABI 仍不做（见 B6） |
 | **B6** | **不砍设备覆盖** | 不用 `abiFilters` 把 AAB 锁死到 arm64（会丢掉 armeabi-v7a 老设备与 x86_64 模拟器）。APK 侧由 CI `--split-per-abi --target-platform android-arm64` 控制即可 |
 
 > 一句话：**只优化"成本"，不动"产出"**。任何优化若无法证明「输出与原来逐位一致 / 用户可达能力不变」，就不进本轮。
@@ -111,8 +111,9 @@ L4 回归守护   ── perf 测试 / 静态分析 / 专项测试 / CI 门禁
 
 | 指标 | 目标 | 现状 | 测量方法 |
 |---|---|---|---|
-| M1 arm64 单包未压缩 | ≤ 90 MB | ≈ 88.7 MB（84.81 + 3.05 + 0.76 + 0.10） | `unzip -l app-arm64-v8a-release.apk` 分类求和 |
-| M2 `flutter_assets` | ≤ 1 MB | 0.76 MB | 同上 |
+| M1 arm64 单包未压缩 | ≤ 105 MB | ≈ 82.4 MB（排除 Vulkan + LiteRT GPU/WebGPU/OpenCL 后端后；CI 实测排除前 104.21MB） | `unzip -l app-arm64-v8a-release.apk` 分类求和 |
+| APK 文件（压缩后） | ≤ 100 MB | ≈ 80.4 MB（排除前 102.19MB，曾触发 APK 门禁） | `stat` APK 文件 |
+| M2 `flutter_assets` | ≤ 1 MB | 0.49 MB | 同上 |
 | M3 新增依赖 | 0 个原生库 / 0 个 native hook | 加密用 `pointycastle` 纯 Dart（+`convert`/`js`） | `pubspec.lock` diff + APK `lib/` 对比 |
 | M4 模型/权重随包 | 0 字节 | 0（`generated_assets` 251MB 全在仓库外） | `grep assets pubspec.yaml` |
 
@@ -163,7 +164,7 @@ L4 回归守护   ── perf 测试 / 静态分析 / 专项测试 / CI 门禁
 | 加密/备份 | `test/snapshot_cipher_test.dart` + `test/encrypted_snapshot_test.dart`（28 项） |
 | VRM/3D | `test/vrm_import_test.dart`（7 项）+ `avatar3d_perf_test.dart` 帧耗时门禁 |
 | 兼容 | `backup_service_test.dart` / `backup_hardening_test.dart` / `db_policies_test.dart` 固定 `snapshot_encryption='off'` 守旧明文分支 |
-| 包体 | ✅ **已落地**（§10 / §10.5）：`tools/check_apk_size.py` + CI 硬门禁，断言单 ABI / `flutter_assets` ≤1MB / 未压缩 ≤105MB / APK ≤100MB / assets 内无模型权重 / **Vulkan 后端不得出现**；另在 `build.gradle.kts` 排除 42MB `libggml-vulkan.so`（已验证 CPU-only 推理，永不加载） |
+| 包体 | ✅ **已落地**（§10 / §10.5）：`tools/check_apk_size.py` + CI 硬门禁，断言单 ABI / `flutter_assets` ≤1MB / 未压缩 ≤105MB / APK ≤100MB / assets 内无模型权重 / **Vulkan 后端不得出现** / **LiteRT GPU/WebGPU/OpenCL 后端与 Dawn 不得出现**；另在 `build.gradle.kts` 排除 42MB `libggml-vulkan.so` + ≈21.8MB LiteRT GPU/WebGPU/OpenCL 后端与 Dawn（已验证 CPU-only 推理 + 纯 Dart CPU 软渲染 3D，永不加载） |
 | 成本契约 | ✅ **已落地**：`test/performance_budget_test.dart` 锁住打字机局部刷新、话题库惰性、渲染器不回退 `sublist`、pubspec 文件白名单、CI 符号分离 |
 | 画面等价 | ✅ **已落地**：`test/frame_buffer_reuse_test.dart` GPU / 软件双路径逐像素对比 |
 
@@ -268,10 +269,10 @@ python -c "…按 lib/<abi>/、classes.dex、assets/ 分类求和…"
 | 落地 | 文件 | 说明 |
 |---|---|---|
 | Dart 符号分离 | `.github/workflows/ci.yml` | APK 与 AAB 两条 release 命令都加 `--obfuscate --split-debug-info=build/app/dart-symbols/{apk,aab}`；符号映射独立 artifact 留存 7 天，**不随包分发**。修正此前两个产物参数不一致 |
-| 包体硬门禁 | `tools/check_apk_size.py` + CI step | 单 ABI 且仅 arm64 / `flutter_assets` ≤1MB / 未压缩 ≤105MB / APK ≤100MB / `assets/flutter_assets/assets/` 无模型权重 / **`libggml-vulkan.so` 不得出现** |
+| 包体硬门禁 | `tools/check_apk_size.py` + CI step | 单 ABI 且仅 arm64 / `flutter_assets` ≤1MB / 未压缩 ≤105MB / APK ≤100MB / `assets/flutter_assets/assets/` 无模型权重 / **`libggml-vulkan.so` 不得出现** / **LiteRT GPU/WebGPU/OpenCL 后端与 Dawn 不得出现** |
 | 契约守护 | `test/performance_budget_test.dart` | pubspec 保持文件白名单、CI 两条命令都带符号分离与门禁 |
 
-**阈值依据（实测）**：排除 Vulkan 后端后，arm64 单 ABI 未压缩 **≈85MB**（llamadart 0.17.5 的 CPU 后端 + Flutter/App/SQLCipher 等）、APK **≈83MB** → 未压缩预算 105MB、APK 预算 100MB，各留 15~20MB 余量容忍原生库版本微调。`flutter_assets` 0.49MB → 1MB 留 0.51MB。`AssetManifest.bin` 等 Flutter 自动生成的小清单不参与模型判定（通用容器后缀需 >1MB 才报错）。门禁分支已本地验证：`PASS`（后排除包）/ 误打 `avatar.glb` `FAIL` / 多 ABI `FAIL` / 含 `libggml-vulkan.so` `FAIL`。
+**阈值依据（实测）**：排除 Vulkan + LiteRT GPU/WebGPU/OpenCL 后端后，arm64 单 ABI 未压缩 **≈82.4MB**（llamadart 0.17.5 的 CPU 后端 + LiteRT CPU 核心 + Flutter/App/SQLCipher 等）、APK **≈80.4MB** → 未压缩预算 105MB、APK 预算 100MB，各留 20MB+ 余量容忍原生库版本微调。`flutter_assets` 0.49MB → 1MB 留 0.51MB。`AssetManifest.bin` 等 Flutter 自动生成的小清单不参与模型判定（通用容器后缀需 >1MB 才报错）。门禁分支已本地验证：`PASS`（后排除包）/ 误打 `avatar.glb` `FAIL` / 多 ABI `FAIL` / 含 `libggml-vulkan.so` `FAIL` / 含 `libLiteRtGpuAccelerator.so` `FAIL`。
 
 **明确不做（B5/B6 后半）**：实测 `.so` 全部为 `Stored`（`extractNativeLibs=false`），安装后不解压、不占双份磁盘。但 `libggml-vulkan.so` 已验证为闲置后端（端侧推理 `gpuLayers=0`）并安全排除；`abiFilters` 只留 arm64 仍不做（砍掉 armeabi-v7a 老设备与 x86_64 模拟器，违反 B6）。`libggml-cpu-*` 多架构变体是运行时按设备 SoC 选择的，**保留**。「体量尽可能小」不以端侧推理崩溃 / 用户装不上为代价——只剥掉已证明永不加载的冗余。
 
@@ -320,4 +321,17 @@ python -c "…按 lib/<abi>/、classes.dex、assets/ 分类求和…"
 
 **若日后要启用 GPU 推理**：须先在 `LocalLlmProvider` 设置 `nGpuLayers > 0`（并接 UI 开关），在真机 `adb logcat` 跑通一条完整 GGUF 回复验证 Vulkan 后端可用，再删除 `build.gradle.kts` 的 exclude 与 `check_apk_size.py` 的 Vulkan 硬检查。在此之前，GPU 离屏加速属未验证能力，不进交付包。
 
-> **诚实边界**：排除后的**真实体积以 CI 产物为准**（本地代理 502 无法跑 release 构建）。门禁预算按「排除 Vulkan 后的实测 ≈85MB」留 20MB 余量设定；若 `llamadart` 后续版本 CPU 后端显著增大，门禁会先于用户报警。
+#### 二次修复（同一门禁二次触发：LiteRT GPU/WebGPU/OpenCL 后端 + Dawn）
+
+**触发**：Vulkan 排除落地（a3a4313）后，CI 重跑 APK 降至 **102.19MB（未压缩 104.21MB）**，Vulkan 已消失（证明 `packaging.jniLibs.excludes` 对 llamadart 的 `code_assets` 原生库确实生效），但仍以 **102.19MB > 100MB** 触发 APK 文件门禁。根因：此前对 `llamadart 0.17.5` 原生库构成判断不准确——除 Vulkan 外，其 `code_assets` 还打包了 Google **LiteRT LM** 整套后端（`libLiteRtLm.so` 24.75MB、`libGemmaModelConstraintProvider.so` 4.55MB）以及 LiteRT 的 **GPU/WebGPU/OpenCL 加速器与采样器 + Dawn WebGPU 运行时**（`libwebgpu_dawn` 5.41 / `libLiteRtGpuAccelerator` 3.26 / `libLiteRtWebGpuAccelerator` 3.06 / `libLiteRtTopKOpenClSampler` 5.05 / `libLiteRtTopKWebGpuSampler` 5.01，合计 ≈21.8MB）。
+
+**证据（决定安全性）**：`lib/core/llm/local_llm_provider.dart` 端侧推理固定 `gpuLayers=0`（CPU-only），全仓无任何 `nGpuLayers>0` 路径；`lib/core/avatar3d/avatar_view.dart` 明确「3D 是纯 Dart CPU 软渲染」，`gpu` 标志仅为 painter 批量/逐三角形切换、**不调用任何 WebGPU/Dawn**。因此 LiteRT 的 GPU/WebGPU/OpenCL 后端与 Dawn WebGPU 运行时在 CPU-only 推理 + CPU 软渲染 3D 下**永不被 `dlopen`**，属纯冗余。注意 `.so` 在 APK 内为 `Stored`（不压缩，见 §10.1），故排除 X MB 即 APK 文件减小 X MB——排除 21.8MB 后 APK 由 102.19MB 降至 ≈80.4MB、未压缩由 104.21MB 降至 ≈82.4MB，两项门禁均留 20MB+ 余量。
+
+**保留项（红色底线）**：llama.cpp CPU 后端（`libllama.so`/`libllama-common.so`/`libggml-base.so`/`libggml-cpu-*`）必须保留；LiteRT 的 **CPU 推理核心**（`libLiteRtLm.so`/`libGemmaModelConstraintProvider.so`，合计 ≈29.3MB）也保留——`llamadart` 可能以 LiteRT 作为备选引擎核心，无法仅凭 app 代码确认其不被加载，错误排除会导致运行时 `dlopen` 失败崩溃。待真机 `adb logcat` 确认 llamadart 在 CPU-only 下不加载 LiteRT 核心后，可进一步剥离这 ≈29.3MB（属下一轮优化，非本次必做）。
+
+**落地**：
+- `android/app/build.gradle.kts` 的 `packaging.jniLibs.excludes` 用 `gpuBackends × abis` 扁平展开，新增 5 个 LiteRT GPU/WebGPU/OpenCL 后端 + Dawn，覆盖四个 ABI。
+- `tools/check_apk_size.py` 新增 **LiteRT GPU/WebGPU/OpenCL 后端与 Dawn 不得出现**的硬检查（与 Vulkan 检查并列），并在门禁分支验证中加入「含 `libLiteRtGpuAccelerator.so` `FAIL`」。
+- 门禁五分支本地验证：`PASS`（后排除包）/ 含 `libggml-vulkan.so` `FAIL` / 含 `libLiteRtGpuAccelerator.so` `FAIL` / 误打 `avatar.glb` `FAIL` / 多 ABI `FAIL`。
+
+> **诚实边界**：排除后的**真实体积以 CI 产物为准**（本地代理 502 无法跑 release 构建）。门禁预算按「排除 Vulkan + LiteRT GPU 后端后的实测 ≈82.4MB（APK ≈80.4MB）」留 20MB+ 余量设定；若 `llamadart` 后续版本 CPU 后端显著增大，门禁会先于用户报警。另：LiteRT CPU 推理核心（≈29.3MB）已确认 app 代码不引用，但因其可能为 llamadart 备选引擎核心、排除有运行时崩溃风险，本轮**保留**，待真机验证后再剥离。

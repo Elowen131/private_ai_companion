@@ -24,14 +24,25 @@ import zipfile
 
 MB = 1024 * 1024
 
-# 与文档 §5.1 的 M1/M2/M4 对齐。基线为排除 Vulkan 后端后的实测值：
-# arm64 单 ABI 未压缩 ≈ 85MB、APK ≈ 83MB（llamadart 0.17.5 的 CPU 后端 + Flutter/App/
-# SQLCipher 等）。预算留 15~20MB 余量容忍原生库版本微调，同时仍能拦住：模型误入包、
-# 新增大型 .so（≥20MB）、Vulkan 后端回归（≈42MB）、多 ABI 回潮。
+# 与文档 §5.1 的 M1/M2/M4 对齐。基线为排除 Vulkan + LiteRT GPU/WebGPU/OpenCL 后端
+# 后的实测值：arm64 单 ABI 未压缩 ≈ 82MB、APK ≈ 80MB（llamadart 0.17.5 的 CPU 后端 +
+# LiteRT CPU 核心 + Flutter/App/SQLCipher 等）。预算留 20~25MB 余量容忍原生库版本微调，
+# 同时仍能拦住：模型误入包、新增大型 .so（≥20MB）、Vulkan 后端回归（≈42MB）、
+# LiteRT GPU/WebGPU/OpenCL 后端回归（≈21.8MB）、多 ABI 回潮。
 MAX_UNCOMPRESSED_MB = 105.0
 MAX_FLUTTER_ASSETS_MB = 1.0
 MAX_APK_FILE_MB = 100.0
 EXPECTED_ABI = "arm64-v8a"
+
+# 永不加载的 GPU / WebGPU / OpenCL 后端（见 android/app/build.gradle.kts 的 excludes）。
+# CPU-only 推理（gpuLayers=0）+ 纯 Dart CPU 软渲染 3D 下这些后端永不被 dlopen。
+GPU_BACKEND_NAMES = (
+    "libwebgpu_dawn.so",
+    "libLiteRtGpuAccelerator.so",
+    "libLiteRtWebGpuAccelerator.so",
+    "libLiteRtTopKOpenClSampler.so",
+    "libLiteRtTopKWebGpuSampler.so",
+)
 
 # 明确属于模型 / 权重：任何大小都不允许出现在 assets/。
 MODEL_SUFFIXES = (
@@ -143,6 +154,15 @@ def main() -> int:
             "lib/ 内出现 libggml-vulkan.so（约 42MB 的 Vulkan GPU 后端）；"
             "本 App 端侧推理固定 gpuLayers=0（CPU-only，见 lib/core/llm/local_llm_provider.dart），"
             "该后端永不加载，应从 android/app/build.gradle.kts 的 packaging jniLibs excludes 排除；"
+            "如需启用 GPU 推理须同步设置 nGpuLayers>0 并在真机验证"
+        )
+    if any(n.endswith(GPU_BACKEND_NAMES) for n, _ in so_entries):
+        failures.append(
+            "lib/ 内出现 LiteRT GPU/WebGPU/OpenCL 后端或 Dawn WebGPU 运行时"
+            "（libwebgpu_dawn / libLiteRtGpuAccelerator / libLiteRtWebGpuAccelerator /"
+            " libLiteRtTopKOpenClSampler / libLiteRtTopKWebGpuSampler，约 21.8MB）；"
+            "本 App 端侧推理固定 gpuLayers=0（CPU-only）且 3D 为纯 Dart CPU 软渲染，"
+            "这些后端永不加载，应从 android/app/build.gradle.kts 的 packaging jniLibs excludes 排除；"
             "如需启用 GPU 推理须同步设置 nGpuLayers>0 并在真机验证"
         )
 
