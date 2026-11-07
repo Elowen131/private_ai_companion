@@ -1,16 +1,24 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:private_ai_companion/core/security/prefs_cipher.dart';
+
 /// 上手引导与聊天偏好的轻量持久化（纯本地 JSON，不含任何聊天内容）。
 ///
 /// 与 MomentPrefs / OverlayPrefs 保持同一套机制，不引入 shared_preferences 依赖。
 /// 所有读写都吞掉异常：偏好文件损坏或落盘失败不应影响 App 启动。
+///
+/// 静止态加密：[cipher] 非空时，`app_prefs.json` 以 AES-256-GCM 密文落盘
+/// （密钥来自系统安全存储，见 [PrefsCipher]），避免云端声纹 API Key、应用锁 PIN
+/// 派生校验值等敏感字段明文暴露。读时若解密失败（旧版明文文件）自动回退明文解析，
+/// 实现升级无感迁移；下一次落盘即改写为密文。传 `null` 时退化为明文（仅测试用）。
 class AppPrefs {
   final String baseDir;
+  final PrefsCipher? cipher;
   final Map<String, dynamic> _cache = {};
   bool _loaded = false;
 
-  AppPrefs(this.baseDir);
+  AppPrefs(this.baseDir, {this.cipher});
 
   String get _file => '$baseDir/app_prefs.json';
 
@@ -20,7 +28,8 @@ class AppPrefs {
     try {
       final f = File(_file);
       if (await f.exists()) {
-        final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+        final raw = await f.readAsString();
+        final j = cipher != null ? await cipher!.tryOpenJson(raw) : jsonDecode(raw);
         _cache.addAll(j);
       }
     } catch (_) {
@@ -31,7 +40,10 @@ class AppPrefs {
 
   Future<void> _write() async {
     try {
-      await File(_file).writeAsString(jsonEncode(_cache));
+      final content = cipher != null
+          ? await cipher!.sealJson(_cache)
+          : jsonEncode(_cache);
+      await File(_file).writeAsString(content);
     } catch (_) {
       // 落盘失败不影响本次会话
     }

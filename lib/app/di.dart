@@ -52,6 +52,7 @@ import 'package:private_ai_companion/core/suggest/suggest_engine.dart';
 import 'package:private_ai_companion/core/gen/media_gen_service.dart';
 import 'package:private_ai_companion/core/gen/local_media_gen_service.dart';
 import 'package:private_ai_companion/core/prefs/app_prefs.dart';
+import 'package:private_ai_companion/core/security/prefs_cipher.dart';
 import 'package:private_ai_companion/core/prefs/global_settings.dart';
 import 'package:private_ai_companion/core/notify/notification_service.dart';
 import 'package:private_ai_companion/core/security/app_lock_service.dart';
@@ -216,7 +217,12 @@ Future<void> setupDependencies() async {
   );
 
   // ---------- 上手引导 / 聊天模式偏好 ----------
-  getIt.registerSingleton<AppPrefs>(AppPrefs(appDir.path));
+  // 偏好文件静止态加密：云端声纹 API Key / 应用锁 PIN 校验值等敏感字段不再明文落盘。
+  // 密钥与数据库 / 快照同源但不同别名（密钥分离），存于系统安全存储。
+  final prefsCipher = const PrefsCipher(
+      SecureCipherKeyProvider(FlutterSecureStorage(),
+          alias: 'app.prefs.key.v1'));
+  getIt.registerSingleton<AppPrefs>(AppPrefs(appDir.path, cipher: prefsCipher));
 
   // ---------- 全局偏好（主题 / 语气强度 / 朗读 / 通知）----------
   final globalSettings = GlobalSettings(getIt<AppPrefs>());
