@@ -195,3 +195,100 @@ CI 报 `chat_functional_test.dart: F4 上下文构建 已删除/已撤回消息�
 **同类排查**：`sample_persona_test` / `wechat_sync_e2e_test` / `video_chat_page_test`
 此前已分别用「循环覆盖」「结构与落库断言」「确定性回声 Provider」消除同类随机依赖；
 F3「删除 AI 消息」只有一条 AI 回复，不存在内容碰撞，无需改动。
+
+---
+
+## 10. 2026-11-09 补录：v7 全域玩法与 3D 形象系统（#299–#306）
+
+用户指出「宠物、孩子、家庭是隶属于这个页面的三大板块」，且此前 gameplay
+「并未实现，宠物类型也并不可选择，孩子与宠物的 3D 建模形象也并未提供」。
+本轮按 8 项任务（#299–#306）重建，架构说明见 `docs/life-world-v7.md`。
+
+### 10.1 三条架构纠正
+
+| # | 用户要求 | 落地 |
+|---|---|---|
+| 1 | 三大板块同页，但每个角色剧情分开、其他角色看不见 | `LifeScope`（`persona:` / `group:` / `legacy:`），所有实体写入带 `(scope_type, scope_id, participant_ids)`，读取只按 `type+id` 过滤；`LifeScope.allows()` 为唯一判定入口 |
+| 2 | 群聊可共育，但必须分清孩子是用户与群里哪个角色所生 | `carrierCandidates()` = 我 + 群内每位角色；`conceive()` 校验 `hasParticipant`，作用域外角色抛 `ArgumentError`；孕期/孩子落 `motherRefId` 与 `parenthoodLabel()` |
+| 3 | 孩子由谁孕育可选、宠物类型可选、两者都有 3D 形象 | 孕育方下拉、`PetCatalog` 二级联动品类（现实 7 类 + 幻想 7 类）、`LifeAvatarPage` 程序化 3D 网格 |
+
+`ChatPage` / `GroupChatPage` 各加一个直达入口，分别传 `LifeScope.forPersona(...)`
+与 `LifeScope.forGroup(...)`；按钮放进 `AppBar.bottom` 横向滚动行，避免历史上
+7 个 IconButton 把标题挤成 0 宽的真机缺陷复发。
+
+### 10.2 六套系统实现要点
+
+- **宠物养成繁育**：`PetCatalog` 14 个一级大类 / 103 个二级品类；`starter/adopt/encounter` 三种获取渠道
+  带差异化初始八维数值；`PetBreeding.offspring()` 支持跨物种、现实×幻想混血，
+  子代独立档案 + 基因位点混合/突变 + 谱系；`runOfflineCare()` 由 CHAR 托管并落流水。
+- **孩子共育成长**：生育/领养双渠道；`Pregnancy.weeklyStory()` 孕周剧情 +
+  `安胎/产检/胎教/陪护` 每周去重；六阶段随 `WorldClock` 时序自动更新；
+  成年独立离家 → 自主组建家庭 → 可互动团聚；`ageHidden` 单独开关隐藏年龄标记。
+- **家族树世代传承**：人族族谱 / 宠物谱系双轨；`LifeInheritance.inherit()`
+  写实传承家风·体质·性格·天赋，幻想传承血脉·印记·宿命·异能并含隔代觉醒。
+- **全域羁绊**：六级，`Bond.attitudeLabel/toneHint/innerOsHint/fantasyHint()`
+  供 CHAR 态度、语气、内心 OS 动态跟随；隐藏年龄时台词不强行暴露年龄。
+- **世界自运转事件**：`WorldEventEngine.synthesize()` 五类 + 幻想高阶事件，
+  每事件带选择项与 `WorldChoiceEffect`；年龄隐藏实体不进成长/家庭事件目标池。
+- **3D 形象全域**：`buildCreatureAvatar()` 复用 22 骨骼 `MeshBuilder`，
+  按 `quadruped/avian/aquatic/elemental/humanoid` 五类体型生成网格；
+  `AvatarProfile` 支持模板套用、手动捏脸、多套形象保存切换；幻想流光/灵纹/
+  气场以顶点色实现，孩子继承父母外貌基因。
+
+### 10.3 数据层
+
+`dbVersion 6 → 7`。`schemaV7Columns` 对 `pet/child/pregnancy/family_member/bond/
+world_event` **只加列**（全部 `NOT NULL DEFAULT`，旧存档无损），新增 `life_event`
+与 `avatar_profile` 两表；`onCreate` 与 `onUpgrade(oldV<7)` 都调用
+`applySchemaV7()`；`snapshotTables` 同步扩到 39 张实体表，快照白名单契约测试
+断言从 37 改为 39。
+
+### 10.4 验证链
+
+| 环节 | 结果 |
+|---|---|
+| `flutter analyze --fatal-infos` | 零问题（修复 12 类编译/静态告警，含 `math.max` 导入、`Vec3` 常量构造、`use_build_context_synchronously`、const 提示） |
+| 新增/重写测试 | `life_game_page_test` 重写为作用域隔离版；新增 `life_systems_pure_test`（16 项规则层）与 `life_world_service_test`（数据库集成，含 v1→v7 迁移） |
+| 全量 `flutter test` | **540 passed / 0 failed**（含真机红屏回归 2 项） |
+| `flutter build apk --debug --target-platform android-x64` | 成功 |
+| 模拟器冷启动冒烟 | 首页 → 聊天页直达 → 角色专属三大板块 → 新增宠物（14 一级 / 103 二级）→ 创建家猫 → 宠物 3D 形象页（4662 三角形 / 22 骨骼 / 20 部件）→ 孩子 Tab 孕育方候选「我 / 岑攸珩」→ 孕期第 1 周剧情与四项护理 → 家族双轨谱系 → 托管记录 / 世界事件 / 羁绊；全程 `flutter:E` 为空。截图 `build/smoke_v7_*.png`、`build/smoke_v7b_*.png`、`build/smoke_v7c_*.png` |
+| `dart run tools/check_topic_coverage.dart` | 通过：全部小类 ≥ 20 条，`buildTopicSeeds()` 产出 3271 条，无重复 / 无未声明分类 |
+| release arm64 分包混淆构建 | 成功，`app-arm64-v8a-release.apk` 53.5 MB；`tools/check_apk_size.py` **PASS：包体预算全部达标** |
+
+**一次校验对象用错**：曾把 release 预算脚本跑在 debug 全 ABI 包（206.83 MB、
+三个 ABI）上，输出多条 FAIL。这不是本轮回归 —— debug 包本就不满足
+`--split-per-abi android-arm64` 的预算前提；改用正式 release 产物后全项 PASS。
+
+**过程中发现并修复的 3 个真实缺陷**：
+1. `LifeAvatarService` 把 `_stageTuning()` 放在用户 tuning 之后展开，手动捏脸/
+   模板套用参数被成长阶段默认值**覆盖**；改为成长阶段作基线、用户参数覆盖之。
+   （新增测试暴露）
+2. `WorldEventEngine` 的年龄隐藏过滤只排除了 `personaIds`，成长/家庭事件仍会把
+   `entityRefs` 中的隐藏实体放进目标池；改为两个维度都过滤。（新增测试暴露）
+3. **模拟器冒烟抓到的整页红屏**：在「生育 · 选择孕育方」里把候选从「我」
+   切到角色时，`dropdown.dart:1852` 抛
+   `There should be exactly one item with [DropdownButton]'s value: Instance of
+   'LifeCarrier'`。根因是 `carrierCandidates()` 每次 build 生成新的
+   `LifeCarrier` 实例，而该类沿用默认引用相等，选中后的当前值在新 items 里
+   匹配到 0 项。修复：给 `LifeCarrier` 实现按 `type+refId` 的 `==`/`hashCode`
+   （`name` 只是展示文案，不参与身份），并给 `PetCategory` / `PetSpecies`
+   按 `id` 补值相等以防同类问题；新增纯测试断言「全部品类 id 唯一」与
+   widget 测试「打开生育面板 → 选角色孕育方 → `takeException() == null`
+   且显示角色名」。单元/组件测试全绿但真机才暴露，说明**对象型下拉必须
+   真机点一次**，静态分析查不出。
+
+**一次环境误判，非代码缺陷**：全量回归曾出现 `avatar3d_perf_test` 超时，
+采样发现 qemu 模拟器进程持续占满约 10 个逻辑核；`adb emu kill` 后同一份代码
+复跑 538/0 全绿。软渲染性能门禁对宿主 CPU 争用敏感，回归时应停掉模拟器。
+
+### 10.5 诚实边界
+
+- 3D 形象是**纯 Dart 程序化几何**（遵守 `flutter_assets ≤ 1MB`、禁止内置
+  GLB/VRM/GGUF 的包体红线）。用户要求的「AI 生图建模」需端侧模型或云端出图服务，
+  当前以「模板套用 + 手动捏脸 + 参数化网格」替代，并未接入图像生成模型。
+- 离线「CHAR 托管」是本地 `WorldClock` 时序推进 + 规则引擎生成托管流水，
+  不产生 LLM 文本，也不在 App 未运行时后台执行。
+- 世界事件、羁绊语气、孕期剧情均为**确定性规则生成**，非 LLM 自由生成。
+- 微信桥接真实 E2E 仍需用户自备「已认证微信开发者账号 + 公网 HTTPS 自部署」。
+- 3D 全域形象尚未出图做人工视觉比对与门禁阈值固化（此前角色 3D 精度升级的
+  人工确认也仍悬而未决）。

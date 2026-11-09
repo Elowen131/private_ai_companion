@@ -19,6 +19,17 @@ class WorldEvent {
   final bool resolved;
   final int createdAt;
 
+  // ---------- v7：作用域 / 选择互动 ----------
+  final String scopeType;
+  final String scopeId;
+  /// 用户可做的选择（选择会改变世界走向，而不是只有一条只读文案）。
+  final List<String> choiceOptions;
+  final String chosenOption;
+  /// 事件影响的实体（pet/child/family id），用于联动养成与年龄隐藏保护。
+  final List<String> affectedRefs;
+  /// 是否年龄相关：年龄隐藏实体不得出现在该类事件中。
+  bool get ageRelated => kind == 'growth' || kind == 'family';
+
   const WorldEvent({
     required this.id,
     required this.kind,
@@ -29,6 +40,11 @@ class WorldEvent {
     required this.worldTime,
     this.resolved = false,
     required this.createdAt,
+    this.scopeType = 'legacy',
+    this.scopeId = 'me',
+    this.choiceOptions = const [],
+    this.chosenOption = '',
+    this.affectedRefs = const [],
   });
 
   WorldEvent copyWith({
@@ -46,6 +62,11 @@ class WorldEvent {
         worldTime: worldTime,
         resolved: resolved ?? this.resolved,
         createdAt: createdAt,
+        scopeType: scopeType,
+        scopeId: scopeId,
+        choiceOptions: choiceOptions,
+        chosenOption: chosenOption,
+        affectedRefs: affectedRefs,
       );
 
   Map<String, dynamic> toMap() => {
@@ -58,6 +79,11 @@ class WorldEvent {
         'world_time': worldTime,
         'resolved': resolved ? 1 : 0,
         'created_at': createdAt,
+        'scope_type': scopeType,
+        'scope_id': scopeId,
+        'choice_options': jsonEncode(choiceOptions),
+        'chosen_option': chosenOption,
+        'affected_refs': jsonEncode(affectedRefs),
       };
 
   factory WorldEvent.fromMap(Map<String, dynamic> m) => WorldEvent(
@@ -72,5 +98,20 @@ class WorldEvent {
         worldTime: (m['world_time'] as num? ?? 0).toInt(),
         resolved: (m['resolved'] as num? ?? 0) != 0,
         createdAt: (m['created_at'] as num? ?? 0).toInt(),
+        scopeType: m['scope_type'] as String? ?? 'legacy',
+        scopeId: m['scope_id'] as String? ?? 'me',
+        choiceOptions: _strList(m['choice_options']),
+        chosenOption: m['chosen_option'] as String? ?? '',
+        affectedRefs: _strList(m['affected_refs']),
       );
+
+  static List<String> _strList(Object? raw) {
+    try {
+      return (jsonDecode(raw as String? ?? '[]') as List)
+          .map((e) => '$e')
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
 }

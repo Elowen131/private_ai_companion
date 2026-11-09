@@ -1,9 +1,11 @@
 import 'package:private_ai_companion/core/models/age_history.dart';
+import 'package:private_ai_companion/core/models/avatar_profile.dart';
 import 'package:private_ai_companion/core/models/bond.dart';
 import 'package:private_ai_companion/core/models/child.dart';
 import 'package:private_ai_companion/core/models/pregnancy.dart';
 import 'package:private_ai_companion/core/models/diary_entry.dart';
 import 'package:private_ai_companion/core/models/family_member.dart';
+import 'package:private_ai_companion/core/models/life_event.dart';
 import 'package:private_ai_companion/core/models/persona_archive.dart';
 import 'package:private_ai_companion/core/models/pet.dart';
 import 'package:private_ai_companion/core/models/plot_edit.dart';
@@ -213,6 +215,17 @@ class BondRepository {
     return rows.map(Bond.fromMap).toList();
   }
 
+  /// 按作用域列出羁绊（v7）。羁绊是「全域」的，但每条记录仍归属某个剧情，
+  /// 查询时严格过滤，避免 A 剧情的羁绊出现在 B 剧情的状态面板里。
+  Future<List<Bond>> listByScope(String scopeType, String scopeId) async {
+    final c = await _db.database;
+    final rows = await c.query('bond',
+        where: 'scope_type = ? AND scope_id = ?',
+        whereArgs: [scopeType, scopeId],
+        orderBy: 'score DESC');
+    return rows.map(Bond.fromMap).toList();
+  }
+
   Future<void> upsert(Bond b) async {
     final c = await _db.database;
     await c.insert('bond', b.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
@@ -297,6 +310,24 @@ class WorldEventRepository {
     final c = await _db.database;
     await c.update('world_event', {'resolved': 1}, where: 'id = ?', whereArgs: [id]);
   }
+
+  /// 记录用户的选择：选择会改变世界走向（写回 chosen_option + resolved）。
+  Future<void> choose(String id, String option) async {
+    final c = await _db.database;
+    await c.update('world_event', {'chosen_option': option, 'resolved': 1},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<List<WorldEvent>> listByScope(String scopeType, String scopeId,
+      {int limit = 200}) async {
+    final c = await _db.database;
+    final rows = await c.query('world_event',
+        where: 'scope_type = ? AND scope_id = ?',
+        whereArgs: [scopeType, scopeId],
+        orderBy: 'world_time DESC',
+        limit: limit);
+    return rows.map(WorldEvent.fromMap).toList();
+  }
 }
 
 // ---------------- 宠物 ----------------
@@ -308,6 +339,22 @@ class PetRepository {
     final c = await _db.database;
     final rows = await c.query('pet', where: 'owner_id = ?', whereArgs: [ownerId]);
     return rows.map(Pet.fromMap).toList();
+  }
+
+  /// 按剧情作用域严格过滤：与角色 A 养的宠物不会出现在角色 B 的板块里。
+  Future<List<Pet>> listByScope(String scopeType, String scopeId) async {
+    final c = await _db.database;
+    final rows = await c.query('pet',
+        where: 'scope_type = ? AND scope_id = ?',
+        whereArgs: [scopeType, scopeId],
+        orderBy: 'created_at ASC');
+    return rows.map(Pet.fromMap).toList();
+  }
+
+  Future<Pet?> get(String id) async {
+    final c = await _db.database;
+    final rows = await c.query('pet', where: 'id = ?', whereArgs: [id]);
+    return rows.isEmpty ? null : Pet.fromMap(rows.first);
   }
 
   Future<void> upsert(Pet p) async {
@@ -335,6 +382,22 @@ class ChildRepository {
         .toList();
   }
 
+  /// 按剧情作用域严格过滤（群聊共育的孩子只在该群聊可见）。
+  Future<List<Child>> listByScope(String scopeType, String scopeId) async {
+    final c = await _db.database;
+    final rows = await c.query('child',
+        where: 'scope_type = ? AND scope_id = ?',
+        whereArgs: [scopeType, scopeId],
+        orderBy: 'born_at_world_time ASC');
+    return rows.map(Child.fromMap).toList();
+  }
+
+  Future<Child?> get(String id) async {
+    final c = await _db.database;
+    final rows = await c.query('child', where: 'id = ?', whereArgs: [id]);
+    return rows.isEmpty ? null : Child.fromMap(rows.first);
+  }
+
   Future<void> upsert(Child ch) async {
     final c = await _db.database;
     await c.insert('child', ch.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
@@ -351,6 +414,38 @@ class FamilyMemberRepository {
     final rows = await c.query('family_member',
         where: 'root_user_id = ?', whereArgs: [rootUserId], orderBy: 'generation ASC');
     return rows.map(FamilyMember.fromMap).toList();
+  }
+
+  /// 按作用域 + 谱系轨道（human / pet）查族谱，双轨并行互不混淆。
+  Future<List<FamilyMember>> listByScope(
+    String scopeType,
+    String scopeId, {
+    String? track,
+  }) async {
+    final c = await _db.database;
+    final rows = await c.query('family_member',
+        where: track == null
+            ? 'scope_type = ? AND scope_id = ?'
+            : 'scope_type = ? AND scope_id = ? AND pedigree_track = ?',
+        whereArgs: track == null
+            ? [scopeType, scopeId]
+            : [scopeType, scopeId, track],
+        orderBy: 'generation ASC, created_at ASC');
+    return rows.map(FamilyMember.fromMap).toList();
+  }
+
+  Future<FamilyMember?> get(String id) async {
+    final c = await _db.database;
+    final rows =
+        await c.query('family_member', where: 'id = ?', whereArgs: [id]);
+    return rows.isEmpty ? null : FamilyMember.fromMap(rows.first);
+  }
+
+  Future<FamilyMember?> byRef(String refId) async {
+    final c = await _db.database;
+    final rows = await c.query('family_member',
+        where: 'ref_id = ?', whereArgs: [refId], limit: 1);
+    return rows.isEmpty ? null : FamilyMember.fromMap(rows.first);
   }
 
   Future<void> upsert(FamilyMember m) async {
@@ -378,6 +473,16 @@ class PregnancyRepository {
     return rows.map(Pregnancy.fromMap).toList();
   }
 
+  /// 按剧情作用域过滤孕期：A 角色的孕期不会出现在 B 角色的板块。
+  Future<List<Pregnancy>> listByScope(String scopeType, String scopeId) async {
+    final c = await _db.database;
+    final rows = await c.query('pregnancy',
+        where: 'scope_type = ? AND scope_id = ?',
+        whereArgs: [scopeType, scopeId],
+        orderBy: 'due_at_world_time ASC');
+    return rows.map(Pregnancy.fromMap).toList();
+  }
+
   Future<void> upsert(Pregnancy p) async {
     final c = await _db.database;
     await c.insert('pregnancy', p.toMap(),
@@ -387,6 +492,110 @@ class PregnancyRepository {
   Future<void> delete(String id) async {
     final c = await _db.database;
     await c.delete('pregnancy', where: 'id = ?', whereArgs: [id]);
+  }
+}
+
+// ---------------- 全域人生 / 托管事件（v7） ----------------
+class LifeEventRepository {
+  final AppDatabase _db;
+  LifeEventRepository(this._db);
+
+  Future<void> insert(LifeEvent e) async {
+    final c = await _db.database;
+    await c.insert('life_event', e.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<List<LifeEvent>> listByScope(
+    String scopeType,
+    String scopeId, {
+    String? kind,
+    bool? onlyOffline,
+    int limit = 200,
+  }) async {
+    final c = await _db.database;
+    final conds = <String>['scope_type = ?', 'scope_id = ?'];
+    final args = <Object?>[scopeType, scopeId];
+    if (kind != null) {
+      conds.add('kind = ?');
+      args.add(kind);
+    }
+    if (onlyOffline != null) {
+      conds.add('offline = ?');
+      args.add(onlyOffline ? 1 : 0);
+    }
+    final rows = await c.query('life_event',
+        where: conds.join(' AND '),
+        whereArgs: args,
+        orderBy: 'world_time DESC, created_at DESC',
+        limit: limit);
+    return rows.map(LifeEvent.fromMap).toList();
+  }
+
+  Future<List<LifeEvent>> listByRef(String refType, String refId,
+      {int limit = 100}) async {
+    final c = await _db.database;
+    final rows = await c.query('life_event',
+        where: 'ref_type = ? AND ref_id = ?',
+        whereArgs: [refType, refId],
+        orderBy: 'world_time DESC',
+        limit: limit);
+    return rows.map(LifeEvent.fromMap).toList();
+  }
+
+  /// 只保留最近 [keep] 条，避免离线托管长期无限写表。
+  Future<int> prune({int keep = 400}) async {
+    final c = await _db.database;
+    return c.rawDelete(
+      'DELETE FROM life_event WHERE id NOT IN '
+      '(SELECT id FROM life_event ORDER BY world_time DESC LIMIT ?)',
+      [keep],
+    );
+  }
+}
+
+// ---------------- 多套 3D 形象档案（v7） ----------------
+class AvatarProfileRepository {
+  final AppDatabase _db;
+  AvatarProfileRepository(this._db);
+
+  Future<List<AvatarProfile>> listFor(String refType, String refId) async {
+    final c = await _db.database;
+    final rows = await c.query('avatar_profile',
+        where: 'ref_type = ? AND ref_id = ?',
+        whereArgs: [refType, refId],
+        orderBy: 'active DESC, updated_at DESC');
+    return rows.map(AvatarProfile.fromMap).toList();
+  }
+
+  Future<AvatarProfile?> activeFor(String refType, String refId) async {
+    final c = await _db.database;
+    final rows = await c.query('avatar_profile',
+        where: 'ref_type = ? AND ref_id = ? AND active = 1',
+        whereArgs: [refType, refId],
+        orderBy: 'updated_at DESC',
+        limit: 1);
+    return rows.isEmpty ? null : AvatarProfile.fromMap(rows.first);
+  }
+
+  Future<void> upsert(AvatarProfile p) async {
+    final c = await _db.database;
+    await c.insert('avatar_profile', p.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// 把某实体的所有形象置为非激活，再把 [id] 设为当前生效的一套。
+  Future<void> activate(String refType, String refId, String id) async {
+    final c = await _db.database;
+    await c.update('avatar_profile', {'active': 0},
+        where: 'ref_type = ? AND ref_id = ?', whereArgs: [refType, refId]);
+    await c.update('avatar_profile', {'active': 1},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> delete(String id) async {
+    final c = await _db.database;
+    await c.delete('avatar_profile', where: 'id = ?', whereArgs: [id]);
   }
 }
 

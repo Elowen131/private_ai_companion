@@ -184,6 +184,7 @@ class AppDatabase {
         await applySchemaV4(db);
         await applySchemaV5(db);
         await applySchemaV6(db);
+        await applySchemaV7(db);
       },
       onUpgrade: (db, oldV, newV) async {
         // 逐版本迁移，不允许静默跳过：漏一版就会让旧库缺表/缺列，运行时才炸。
@@ -192,6 +193,7 @@ class AppDatabase {
         if (oldV < 4) await applySchemaV4(db);
         if (oldV < 5) await applySchemaV5(db);
         if (oldV < 6) await applySchemaV6(db);
+        if (oldV < 7) await applySchemaV7(db);
       },
       onDowngrade: (db, oldV, newV) async {
         // 降级安装不删用户数据，仅记录审计；查询按现有列正常工作。

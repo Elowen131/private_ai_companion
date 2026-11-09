@@ -138,6 +138,25 @@ Future<void> applySchemaV6(Database db) async {
   await setMeta(db, 'schema_baseline', 'v6');
 }
 
+/// v7：三大板块作用域隔离 + 全域事件/形象表。
+///
+/// 两个关键约束：
+/// 1. **只加列**，`pet` / `child` / `pregnancy` / `family_member` / `bond` /
+///    `world_event` 的既有列布局一个字段都不改，旧版本 App 降级打开也不会读错列。
+/// 2. 全部新列带 `NOT NULL DEFAULT`，老行自动落到 `'legacy' / 'me'` 作用域，
+///    升级后依然能在「全部（旧存档）」作用域中查看，绝不静默丢数据。
+Future<void> applySchemaV7(Database db) async {
+  for (final stmt in schemaV7Statements) {
+    await db.execute(stmt);
+  }
+  for (final table in schemaV7Columns.entries) {
+    for (final col in table.value.entries) {
+      await _ensureColumn(db, table.key, col.key, col.value);
+    }
+  }
+  await setMeta(db, 'schema_baseline', 'v7');
+}
+
 /// 幂等加列：PRAGMA 探测后按需 ALTER。
 Future<void> _ensureColumn(
     DatabaseExecutor db, String table, String column, String decl) async {

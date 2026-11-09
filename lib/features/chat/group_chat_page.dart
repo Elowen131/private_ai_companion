@@ -10,6 +10,8 @@ import 'package:private_ai_companion/data/repositories/conversation_repository.d
 import 'package:private_ai_companion/data/repositories/message_repository.dart';
 import 'package:private_ai_companion/features/chat/widgets/message_bubble.dart';
 import 'package:private_ai_companion/features/chat/widgets/quick_keys.dart';
+import 'package:private_ai_companion/core/life/life_scope.dart';
+import 'package:private_ai_companion/features/life/life_game_page.dart';
 
 /// 群聊页（多角色同场）。
 ///
@@ -310,6 +312,25 @@ class _GroupChatPageState extends State<GroupChatPage> {
     });
   }
 
+  /// 群聊共育入口：作用域是 conversationId，参与者全部带入。
+  ///
+  /// 用户要求群聊里可以共同养育，但必须分清孩子是用户与群里哪位角色所生；
+  /// 把 `_participants` 完整传下去，孕育方候选才不会退化成「默认第一位」。
+  Future<void> _openLifeGame() async {
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LifeGamePage(
+          initialScope: LifeScope.forGroup(
+            widget.conversationId,
+            participantIds: _participants,
+            label: _conv?.title ?? '群聊共育',
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final participants = _participants;
@@ -336,6 +357,11 @@ class _GroupChatPageState extends State<GroupChatPage> {
             tooltip: '本轮由谁发言',
             icon: const Icon(Icons.record_voice_over_outlined),
             onPressed: participants.isEmpty || _busy ? null : _openSpeakerSheet,
+          ),
+          IconButton(
+            tooltip: '群聊共育 · 宠物 / 孩子 / 家族',
+            icon: const Icon(Icons.pets_outlined),
+            onPressed: _openLifeGame,
           ),
         ],
       ),

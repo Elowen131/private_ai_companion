@@ -30,6 +30,7 @@ import 'package:http/http.dart' as http;
 import 'package:private_ai_companion/core/diary/diary_service.dart';
 import 'package:private_ai_companion/core/plot/plot_edit_service.dart';
 import 'package:private_ai_companion/core/bond/bond_service.dart';
+import 'package:private_ai_companion/core/life/life_world_service.dart';
 import 'package:private_ai_companion/core/persona/persona_archive_service.dart';
 import 'package:private_ai_companion/core/persona/persona_randomizer.dart';
 
@@ -135,6 +136,9 @@ Future<void> setupDependencies() async {
   getIt.registerSingleton<FamilyMemberRepository>(FamilyMemberRepository(db));
   getIt.registerSingleton<AgeHistoryRepository>(AgeHistoryRepository(db));
   getIt.registerSingleton<PregnancyRepository>(PregnancyRepository(db));
+  // v7：全域人生事件流水 + 多套 3D 形象档案。
+  getIt.registerSingleton<LifeEventRepository>(LifeEventRepository(db));
+  getIt.registerSingleton<AvatarProfileRepository>(AvatarProfileRepository(db));
 
   // ---------- 第 21 章延伸：宠物 / 孩子 / 家族 gameplay ----------
   // WorldClock 必须先于 ChildService 注册：ChildService 构造时就取用 WorldClock，
@@ -158,6 +162,23 @@ Future<void> setupDependencies() async {
       getIt<FamilyService>(),
       getIt<WorldClock>(),
       uuid,
+    ),
+  );
+
+  // v7 全域系统：作用域隔离的宠物/孩子/家族 + 羁绊 + 世界事件 + 离线托管。
+  // 所有依赖仓储与 WorldClock 均已在上方注册，符合同步装配顺序契约。
+  getIt.registerSingleton<LifeWorldService>(
+    LifeWorldService(
+      pets: getIt<PetRepository>(),
+      children: getIt<ChildRepository>(),
+      pregnancies: getIt<PregnancyRepository>(),
+      family: getIt<FamilyMemberRepository>(),
+      bonds: getIt<BondRepository>(),
+      worldEvents: getIt<WorldEventRepository>(),
+      events: getIt<LifeEventRepository>(),
+      avatars: getIt<AvatarProfileRepository>(),
+      clock: getIt<WorldClock>(),
+      uuid: uuid,
     ),
   );
 

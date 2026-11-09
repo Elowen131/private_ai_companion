@@ -1,26 +1,42 @@
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart';
 
 import 'package:private_ai_companion/app/di.dart';
-import 'package:private_ai_companion/core/life/child_service.dart';
-import 'package:private_ai_companion/core/life/family_service.dart';
-import 'package:private_ai_companion/core/life/pet_service.dart';
-import 'package:private_ai_companion/core/models/child.dart';
-import 'package:private_ai_companion/core/models/family_member.dart';
-import 'package:private_ai_companion/core/models/pet.dart';
-import 'package:private_ai_companion/core/models/pregnancy.dart';
-import 'package:private_ai_companion/features/life/family_tree_view.dart';
+import 'package:private_ai_companion/core/life/life_scope.dart';
+import 'package:private_ai_companion/core/life/life_world_service.dart';
+import 'package:private_ai_companion/core/models/conversation.dart';
+import 'package:private_ai_companion/core/models/persona.dart';
+import 'package:private_ai_companion/core/time/world_clock.dart';
+import 'package:private_ai_companion/data/repositories/conversation_repository.dart';
+import 'package:private_ai_companion/data/repositories/persona_repository.dart';
+import 'package:private_ai_companion/features/life/life_child_tab.dart';
+import 'package:private_ai_companion/features/life/life_family_tab.dart';
+import 'package:private_ai_companion/features/life/life_pet_tab.dart';
+import 'package:private_ai_companion/features/life/life_records_page.dart';
 
-/// 宠物 / 孩子 / 家族 总入口页（宠物养成繁育系统 · 孩子共育成长系统 · 家族树世代传承）。
+/// 宠物 / 孩子 / 家族 三大板块总入口（v7 作用域隔离版）。
 ///
-/// 三个 Tab：
-/// - **宠物**：养成（喂/玩/清洁/训练/休息/抚摸）+ 繁育（混血，子代独立档案）。
-/// - **孩子**：孕期倒计时 + 出生 + 成长推进（月龄随世界时序自动更新，成年独立）。
-/// - **家族**：可视化族谱（世代列 + 父子连线）。
+/// 用户明确要求三板块隶属于同一页面，但**每个角色 / 每个群聊的养育剧情
+/// 完全分开**：与 A 角色养的宠物孩子，B 角色看不见；群聊共育时明确
+/// 孩子是用户与群里哪个角色所生；孕育方由用户选择。
 ///
-/// 拥有权 / 族谱根统一用 `'me'`（与全 App 用户标识约定一致）。
+/// 顶部作用域切换器把「角色 / 群聊 / 旧存档」列成独立选项，所有 Tab 只按
+/// 当前作用域读写，切换即重新加载。聊天页与群聊页可带 `initialScope` 直达。
 class LifeGamePage extends StatefulWidget {
-  const LifeGamePage({super.key});
+  /// 从聊天 / 群聊直达时预置的作用域（不传则默认第一个角色作用域）。
+  final LifeScope? initialScope;
+
+  /// 测试注入：允许 widget 测试用 stub 服务装配，不打开数据库。
+  final LifeWorldService? world;
+  final List<LifeScope>? scopes;
+  final Map<String, String>? personaNames;
+
+  const LifeGamePage({
+    super.key,
+    this.initialScope,
+    this.world,
+    this.scopes,
+    this.personaNames,
+  });
 
   @override
   State<LifeGamePage> createState() => _LifeGamePageState();
@@ -28,19 +44,24 @@ class LifeGamePage extends StatefulWidget {
 
 class _LifeGamePageState extends State<LifeGamePage>
     with SingleTickerProviderStateMixin {
-  static const String _root = 'me';
   late final TabController _tab;
-  late final PetService _pets;
-  late final ChildService _children;
-  late final FamilyService _family;
+  late final LifeWorldService? _world;
+  List<LifeScope> _scopes = [LifeScope.legacy];
+  Map<String, String> _names = const {};
+  late LifeScope _scope;
+  int _version = 0;
+  bool _settling = false;
 
   @override
   void initState() {
     super.initState();
     _tab = TabController(length: 3, vsync: this);
-    _pets = getIt<PetService>();
-    _children = getIt<ChildService>();
-    _family = getIt<FamilyService>();
+    _world = widget.world ??
+        (getIt.isRegistered<LifeWorldService>()
+            ? getIt<LifeWorldService>()
+            : null);
+    _scope = widget.initialScope ?? LifeScope.legacy;
+    _loadScopes();
   }
 
   @override
@@ -49,405 +70,185 @@ class _LifeGamePageState extends State<LifeGamePage>
     super.dispose();
   }
 
-  Future<void> _refresh() async => setState(() {});
+  Future<void> _loadScopes() async {
+    if (widget.scopes != null) {
+      _scopes = widget.scopes!;
+      _names = widget.personaNames ?? const {};
+    } else {
+      try {
+        final personas = getIt.isRegistered<PersonaRepository>()
+            ? await getIt<PersonaRepository>().list()
+            : <Persona>[];
+        final convs = getIt.isRegistered<ConversationRepository>()
+            ? await getIt<ConversationRepository>().list()
+            : <Conversation>[];
+        _scopes = buildLifeScopes(personas, convs);
+        _names = personaNameMap(personas);
+      } catch (_) {
+        _scopes = [LifeScope.legacy];
+        _names = const {};
+      }
+    }
+    if (widget.initialScope == null && _scopes.isNotEmpty) {
+      _scope = _scopes.first;
+    }
+    if (!_scopes.any((s) => s == _scope)) {
+      _scope = _scopes.isNotEmpty ? _scopes.first : LifeScope.legacy;
+    }
+    // 上线结算：把离线流逝折算成 CHAR 托管养护，产出可查记录。
+    await _settleOffline();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _settleOffline() async {
+    if (_world == null || _settling) return;
+    _settling = true;
+    try {
+      if (getIt.isRegistered<WorldClock>()) {
+        final elapsed = await getIt<WorldClock>().tickOffline();
+        if (elapsed > 0) {
+          final capped = elapsed > const Duration(days: 365).inMilliseconds
+              ? const Duration(days: 365).inMilliseconds
+              : elapsed;
+          await _world.runOfflineCare(_scope, elapsedMs: capped);
+        }
+      }
+      await _world.ensureRoots(_scope, _names);
+    } catch (_) {
+      // 结算失败不阻断页面展示：养成本身仍可正常操作。
+    } finally {
+      _settling = false;
+    }
+  }
+
+  void _refresh() => setState(() => _version++);
+
+  Future<void> _switchScope(LifeScope? s) async {
+    if (s == null || s == _scope) return;
+    setState(() => _scope = s);
+    await _settleOffline();
+    if (mounted) _refresh();
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
           title: const Text('宠物 · 孩子 · 家族'),
-          // 必须与下面的 TabBarView 共用同一个 TabController：本页外层没有
-          // DefaultTabController，TabBar 若省略 controller 会抛
-          // "No TabController for TabBar"，框架清理时再触发
-          // InheritedElement.debugDeactivated 的 _dependents.isEmpty 断言，
-          // 整页直接红屏（真机实测）。
-          bottom: TabBar(
-            controller: _tab,
-            tabs: const [
-              Tab(text: '宠物'),
-              Tab(text: '孩子'),
-              Tab(text: '家族'),
-            ],
-          ),
-        ),
-        body: TabBarView(
-          controller: _tab,
-          children: [
-            _PetTab(pets: _pets, root: _root, onChanged: _refresh),
-            _ChildTab(children: _children, family: _family, root: _root, onChanged: _refresh),
-            _FamilyTab(family: _family, root: _root),
-          ],
-        ),
-      );
-}
-
-// ---------------------------------------------------------------------------
-// 宠物 Tab
-// ---------------------------------------------------------------------------
-class _PetTab extends StatefulWidget {
-  final PetService pets;
-  final String root;
-  final VoidCallback onChanged;
-  const _PetTab(
-      {required this.pets, required this.root, required this.onChanged});
-
-  @override
-  State<_PetTab> createState() => _PetTabState();
-}
-
-class _PetTabState extends State<_PetTab> {
-  List<Pet> _list = [];
-  List<Pet> _breedSel = [];
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    _list = await widget.pets.listByOwner(widget.root);
-    if (mounted) setState(() => _loading = false);
-  }
-
-  Future<void> _addStarter() async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final pet = Pet(
-      id: 'pet_${const Uuid().v4()}',
-      name: '新宠物',
-      category: '现实宠物',
-      species: '猫',
-      gender: 'F',
-      ageMonths: 0,
-      ownerId: widget.root,
-      traits: ['粘人'],
-      bondScore: 50,
-      stats: PetService.defaultStats(),
-      parentIds: const [],
-      worldview: 'realistic',
-      createdAt: now,
-      updatedAt: now,
-    );
-    await widget.pets.upsert(pet);
-    await _load();
-    widget.onChanged();
-  }
-
-  Future<void> _act(Future<Pet> Function(Pet) fn, Pet p) async {
-    await fn(p);
-    await _load();
-    widget.onChanged();
-  }
-
-  Future<void> _advance() async {
-    await widget.pets.advanceTime(
-      _list.first,
-      const Duration(days: 30),
-    );
-    await _load();
-    widget.onChanged();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              ElevatedButton.icon(
-                onPressed: _addStarter,
-                icon: const Icon(Icons.add),
-                label: const Text('新增宠物'),
-              ),
-              const SizedBox(width: 8),
-              if (_list.isNotEmpty)
-                ElevatedButton.icon(
-                  onPressed: _advance,
-                  icon: const Icon(Icons.fast_forward),
-                  label: const Text('推进 30 天'),
-                ),
-              if (_breedSel.length == 2)
-                ElevatedButton.icon(
-                  onPressed: () async {
-                    await widget.pets.breed(_breedSel[0], _breedSel[1],
-                        ownerId: widget.root);
-                    _breedSel = [];
-                    await _load();
-                    widget.onChanged();
-                  },
-                  icon: const Icon(Icons.favorite),
-                  label: const Text('繁育这俩'),
-                ),
-            ],
-          ),
-        ),
-        if (_breedSel.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text('已选 ${_breedSel.length}/2 只用于繁育',
-                style: const TextStyle(color: Colors.grey)),
-          ),
-        Expanded(
-          child: ListView.builder(
-            itemCount: _list.length,
-            itemBuilder: (c, i) {
-              final p = _list[i];
-              final sel = _breedSel.contains(p);
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text('${p.name} · ${p.species}',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: 16)),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(96),
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 48,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.theater_comedy_outlined, size: 18),
+                        const SizedBox(width: 6),
+                        const Text('剧情', style: TextStyle(fontSize: 12)),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: DropdownButton<LifeScope>(
+                            key: const ValueKey('life_scope_picker'),
+                            value: _scope,
+                            isExpanded: true,
+                            underline: const SizedBox.shrink(),
+                            items: [
+                              for (final s in _scopes)
+                                DropdownMenuItem(
+                                  value: s,
+                                  child: Text(
+                                    '${s.label} · ${s.isGroup ? "群聊共育" : s.isPersona ? "专属剧情" : "旧存档"}',
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                            ],
+                            onChanged: _switchScope,
                           ),
-                          FilterChip(
-                            label: Text(sel ? '已选繁育' : '选入繁育'),
-                            selected: sel,
-                            onSelected: (_) => setState(() {
-                              sel
-                                  ? _breedSel.remove(p)
-                                  : (_breedSel.length < 2
-                                      ? _breedSel.add(p)
-                                      : null);
-                            }),
+                        ),
+                        IconButton(
+                          key: const ValueKey('life_records_entry'),
+                          tooltip: '托管记录 / 世界事件 / 羁绊',
+                          icon: const Icon(Icons.history_edu_outlined, size: 20),
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => LifeRecordsPage(
+                                scope: _scope,
+                                world: _world,
+                                personaNames: _names,
+                              ),
+                            ),
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text('月龄 ${p.ageMonths} · 亲密度 ${p.bondScore.round()}'),
-                      const SizedBox(height: 6),
-                      _statsBar(p.stats),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        children: [
-                          _careBtn('喂', () => _act(widget.pets.feed, p)),
-                          _careBtn('玩', () => _act(widget.pets.play, p)),
-                          _careBtn('清洁', () => _act(widget.pets.clean, p)),
-                          _careBtn('训练', () => _act(widget.pets.train, p)),
-                          _careBtn('休息', () => _act(widget.pets.rest, p)),
-                          _careBtn('抚摸', () => _act(widget.pets.pet, p)),
-                          TextButton(
-                            onPressed: () async {
-                              await widget.pets.delete(p.id);
-                              await _load();
-                              widget.onChanged();
-                            },
-                            child: const Text('放归',
-                                style: TextStyle(color: Colors.redAccent)),
-                          ),
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              );
-            },
+                // 必须与下面的 TabBarView 共用同一个 TabController：本页外层没有
+                // DefaultTabController，TabBar 若省略 controller 会抛
+                // "No TabController for TabBar"，框架清理时再触发
+                // InheritedElement.debugDeactivated 的 _dependents.isEmpty 断言，
+                // 整页直接红屏（真机实测）。
+                TabBar(
+                  controller: _tab,
+                  tabs: const [
+                    Tab(text: '宠物'),
+                    Tab(text: '孩子'),
+                    Tab(text: '家族'),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
-      ],
-    );
-  }
-
-  Widget _careBtn(String label, VoidCallback onTap) => OutlinedButton(
-        onPressed: onTap,
-        child: Text(label),
-      );
-
-  Widget _statsBar(Map<String, double> stats) {
-    final keys = ['mood', 'hunger', 'energy', 'intimacy', 'skill', 'training', 'clean'];
-    final labels = {
-      'mood': '情绪',
-      'hunger': '饱食',
-      'energy': '精力',
-      'intimacy': '亲密',
-      'skill': '技能',
-      'training': '训练',
-      'clean': '清洁',
-    };
-    return Wrap(
-      spacing: 10,
-      runSpacing: 4,
-      children: keys.map((k) {
-        final v = (stats[k] ?? 0).round();
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        body: Column(
           children: [
-            Text('${labels[k]}: $v', style: const TextStyle(fontSize: 11)),
-            SizedBox(
-              width: 56,
-              height: 6,
-              child: LinearProgressIndicator(
-                value: v / 100,
-                backgroundColor: Colors.grey.shade200,
+            _scopeHint(context),
+            Expanded(
+              child: TabBarView(
+                controller: _tab,
+                children: [
+                  LifePetTab(
+                    key: ValueKey('pet_${_scope.key}_$_version'),
+                    scope: _scope,
+                    world: _world,
+                    personaNames: _names,
+                    onChanged: _refresh,
+                  ),
+                  LifeChildTab(
+                    key: ValueKey('child_${_scope.key}_$_version'),
+                    scope: _scope,
+                    world: _world,
+                    personaNames: _names,
+                    onChanged: _refresh,
+                  ),
+                  LifeFamilyTab(
+                    key: ValueKey('family_${_scope.key}_$_version'),
+                    scope: _scope,
+                    world: _world,
+                    personaNames: _names,
+                    onChanged: _refresh,
+                  ),
+                ],
               ),
             ),
           ],
-        );
-      }).toList(),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 孩子 Tab
-// ---------------------------------------------------------------------------
-class _ChildTab extends StatefulWidget {
-  final ChildService children;
-  final FamilyService family;
-  final String root;
-  final VoidCallback onChanged;
-  const _ChildTab(
-      {required this.children,
-      required this.family,
-      required this.root,
-      required this.onChanged});
-
-  @override
-  State<_ChildTab> createState() => _ChildTabState();
-}
-
-class _ChildTabState extends State<_ChildTab> {
-  List<Pregnancy> _pregnancies = [];
-  List<Child> _children = [];
-  int _worldTime = 0;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    _pregnancies = await widget.children.pending();
-    // ChildRepository.listByParent 返回父母含 root 的孩子（含与角色共同生育的）。
-    _children = await widget.children.listByParent(widget.root);
-    _worldTime = await _nowWorld();
-    if (mounted) setState(() => _loading = false);
-  }
-
-  Future<int> _nowWorld() async => DateTime.now().millisecondsSinceEpoch;
-
-  Future<void> _conceive() async {
-    await widget.children.conceive(
-      parentIds: [widget.root, 'char_demo'],
-      motherType: 'char',
-      motherRefId: 'char_demo',
-      worldview: 'realistic',
-      plannedTraits: ['聪慧'],
-    );
-    await _load();
-    widget.onChanged();
-  }
-
-  Future<void> _birth(Pregnancy p) async {
-    await widget.children.birth(p, '宝宝', rootUserId: widget.root);
-    await _load();
-    widget.onChanged();
-  }
-
-  Future<void> _advance(Child c) async {
-    await widget.children.advanceTime(c, const Duration(days: 365));
-    await _load();
-    widget.onChanged();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        ElevatedButton.icon(
-          onPressed: _conceive,
-          icon: const Icon(Icons.pregnant_woman),
-          label: const Text('受孕（演示：用户 × 角色）'),
         ),
-        const SizedBox(height: 10),
-        const Text('孕期', style: TextStyle(fontWeight: FontWeight.bold)),
-        ..._pregnancies.map((p) => Card(
-              child: ListTile(
-                title: Text('预产期倒计时 · 剩余 ${p.weeksRemaining(_worldTime)} 周'),
-                subtitle: Text('遗传特质：${p.plannedTraits.join('、')}'),
-                trailing: ElevatedButton(
-                  onPressed: () => _birth(p),
-                  child: const Text('催产/出生'),
-                ),
-              ),
-            )),
-        const SizedBox(height: 10),
-        const Text('孩子', style: TextStyle(fontWeight: FontWeight.bold)),
-        ..._children.map((c) => Card(
-              child: ListTile(
-                title: Text('${c.name} · ${c.lifeStage}'),
-                subtitle: Text(
-                    '月龄 ${c.ageMonths} · 亲代 ${c.parentIds.length} · ${c.independent ? '已独立离家' : '同住'}'),
-                trailing: ElevatedButton(
-                  onPressed: () => _advance(c),
-                  child: const Text('成长 +1 年'),
-                ),
-              ),
-            )),
-      ],
-    );
-  }
-}
+      );
 
-// ---------------------------------------------------------------------------
-// 家族 Tab
-// ---------------------------------------------------------------------------
-class _FamilyTab extends StatefulWidget {
-  final FamilyService family;
-  final String root;
-  const _FamilyTab({required this.family, required this.root});
-
-  @override
-  State<_FamilyTab> createState() => _FamilyTabState();
-}
-
-class _FamilyTabState extends State<_FamilyTab> {
-  List<FamilyMember> _members = [];
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    // 确保根用户节点存在，让族谱始终有一个可见的起点（即使尚未生育 / 繁育）。
-    await widget.family.ensureMember(
-      rootUserId: widget.root,
-      memberType: 'user',
-      refId: widget.root,
-      name: '我',
-      generation: 0,
-    );
-    _members = await widget.family.tree(widget.root);
-    if (mounted) setState(() => _loading = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return FamilyTreeView(members: _members);
-  }
+  Widget _scopeHint(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: Text(
+          _scope.isGroup
+              ? '当前：${_scope.label} · 群聊共育，孩子会标明是用户与群里哪位角色所生'
+              : _scope.isPersona
+                  ? '当前：${_scope.label} 的专属剧情 · 其他角色不可见'
+                  : '当前：旧存档（v7 之前的数据），与新版角色剧情分开存放',
+          style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        ),
+      );
 }

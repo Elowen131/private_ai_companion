@@ -13,7 +13,7 @@
 library;
 
 /// 当前 schema 版本。升版必须同时补 `migrations.dart` 的逐版本迁移分支。
-const int dbVersion = 6;
+const int dbVersion = 7;
 
 /// 历史基线版本，仅供集成测试构造「老设备数据库」使用。
 const int dbVersionV1 = 1;
@@ -556,6 +556,8 @@ const List<String> snapshotTables = [
   'age_history',
   'persona_voice',
   'pregnancy',
+  'life_event',
+  'avatar_profile',
 ];
 
 /// v4 增量 DDL：隐私空间 + 角色声纹档案。
@@ -623,6 +625,115 @@ const Map<String, String> schemaV5PersonaVoiceColumns = {
   'clone_created_at': 'INTEGER NOT NULL DEFAULT 0',
   'tts_voice': "TEXT NOT NULL DEFAULT ''",
 };
+
+/// v7：三大板块的**作用域隔离**与全域系统字段。
+///
+/// 用户明确要求：宠物/孩子/家族隶属于「每个角色 / 每个群聊」各自的剧情，
+/// 不同角色之间互相看不见；群聊可共同养育，但必须分清孩子是用户与群里
+/// 哪个角色所生；孩子孕育方由用户选择。
+///
+/// 全部是「只加列」，且一律带 `NOT NULL DEFAULT`：
+/// - 老库升级时已有行自动得到 `'legacy'` 作用域（对应旧版全局 `'me'`），
+///   既不丢数据，也不会在新版按角色隔离后凭空消失；
+/// - 现有 Service / Repository 的 `toMap()` 不含这些列也能照常 insert。
+///
+/// 作用域语义：`scope_type` ∈ {'persona','group','legacy'}，
+/// `scope_id` 为 persona id / conversation id / 'me'；
+/// `participant_ids` 是 JSON 数组，记录该作用域涉及的角色，群聊共育时用于
+/// 判定「孩子属于用户与群里的哪一个角色」以及哪些角色可见。
+const Map<String, Map<String, String>> schemaV7Columns = {
+  'pet': {
+    'scope_type': "TEXT NOT NULL DEFAULT 'legacy'",
+    'scope_id': "TEXT NOT NULL DEFAULT 'me'",
+    'participant_ids': "TEXT NOT NULL DEFAULT '[]'",
+    'acquisition': "TEXT NOT NULL DEFAULT 'adopt'",
+    'life_stage': "TEXT NOT NULL DEFAULT '幼崽'",
+    'appearance_genes': "TEXT NOT NULL DEFAULT '{}'",
+    'avatar_profile_id': "TEXT NOT NULL DEFAULT ''",
+    'pedigree': "TEXT NOT NULL DEFAULT '[]'",
+  },
+  'child': {
+    'scope_type': "TEXT NOT NULL DEFAULT 'legacy'",
+    'scope_id': "TEXT NOT NULL DEFAULT 'me'",
+    'participant_ids': "TEXT NOT NULL DEFAULT '[]'",
+    'mother_type': "TEXT NOT NULL DEFAULT 'char'",
+    'mother_ref_id': "TEXT NOT NULL DEFAULT ''",
+    'avatar_profile_id': "TEXT NOT NULL DEFAULT ''",
+    'talents': "TEXT NOT NULL DEFAULT '[]'",
+    'life_events': "TEXT NOT NULL DEFAULT '[]'",
+    'spouse_ref_id': "TEXT NOT NULL DEFAULT ''",
+    'trajectory': "TEXT NOT NULL DEFAULT ''",
+    'age_hidden': 'INTEGER NOT NULL DEFAULT 0',
+  },
+  'pregnancy': {
+    'scope_type': "TEXT NOT NULL DEFAULT 'legacy'",
+    'scope_id': "TEXT NOT NULL DEFAULT 'me'",
+    'participant_ids': "TEXT NOT NULL DEFAULT '[]'",
+    'care_actions': "TEXT NOT NULL DEFAULT '[]'",
+    'care_week': 'INTEGER NOT NULL DEFAULT 0',
+    'baby_name': "TEXT NOT NULL DEFAULT ''",
+  },
+  'family_member': {
+    'scope_type': "TEXT NOT NULL DEFAULT 'legacy'",
+    'scope_id': "TEXT NOT NULL DEFAULT 'me'",
+    'avatar_profile_id': "TEXT NOT NULL DEFAULT ''",
+    'appearance_genes': "TEXT NOT NULL DEFAULT '{}'",
+    'spouse_ref_id': "TEXT NOT NULL DEFAULT ''",
+    'life_events': "TEXT NOT NULL DEFAULT '[]'",
+    'age_hidden': 'INTEGER NOT NULL DEFAULT 0',
+    'pedigree_track': "TEXT NOT NULL DEFAULT 'human'",
+    'inherited_traits': "TEXT NOT NULL DEFAULT '[]'",
+  },
+  'bond': {
+    'scope_type': "TEXT NOT NULL DEFAULT 'legacy'",
+    'scope_id': "TEXT NOT NULL DEFAULT 'me'",
+  },
+  'world_event': {
+    'scope_type': "TEXT NOT NULL DEFAULT 'legacy'",
+    'scope_id': "TEXT NOT NULL DEFAULT 'me'",
+    'choice_options': "TEXT NOT NULL DEFAULT '[]'",
+    'chosen_option': "TEXT NOT NULL DEFAULT ''",
+    'affected_refs': "TEXT NOT NULL DEFAULT '[]'",
+  },
+};
+
+/// v7 新表：`life_event`（统一人生/孕期/成长/托管/世界事件流水）与
+/// `avatar_profile`（多套 3D 形象：模板套用 / 手动捏脸 / 保存切换）。
+const List<String> schemaV7Statements = [
+  '''CREATE TABLE IF NOT EXISTS life_event(
+    id TEXT PRIMARY KEY,
+    scope_type TEXT NOT NULL DEFAULT 'legacy',
+    scope_id TEXT NOT NULL DEFAULT 'me',
+    kind TEXT NOT NULL,
+    ref_type TEXT NOT NULL DEFAULT '',
+    ref_id TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    world_time INTEGER NOT NULL,
+    offline INTEGER NOT NULL DEFAULT 0 CHECK(offline IN (0,1)),
+    created_at INTEGER NOT NULL
+  )''',
+  'CREATE INDEX IF NOT EXISTS idx_life_event_scope '
+      'ON life_event(scope_type, scope_id, world_time DESC)',
+  'CREATE INDEX IF NOT EXISTS idx_life_event_ref '
+      'ON life_event(ref_type, ref_id, world_time DESC)',
+  '''CREATE TABLE IF NOT EXISTS avatar_profile(
+    id TEXT PRIMARY KEY,
+    scope_type TEXT NOT NULL DEFAULT 'legacy',
+    scope_id TEXT NOT NULL DEFAULT 'me',
+    ref_type TEXT NOT NULL,
+    ref_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    template TEXT NOT NULL DEFAULT '',
+    tuning TEXT NOT NULL DEFAULT '{}',
+    genes TEXT NOT NULL DEFAULT '{}',
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )''',
+  'CREATE INDEX IF NOT EXISTS idx_avatar_profile_ref '
+      'ON avatar_profile(ref_type, ref_id, active DESC, updated_at DESC)',
+];
 
 /// 含本地文件路径的列：导出时把路径替换成占位符，恢复时重新落盘并回写。
 /// `moment.images` 是 JSON 数组字符串，同样按子串替换处理。

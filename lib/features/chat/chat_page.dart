@@ -37,6 +37,8 @@ import 'package:private_ai_companion/features/role_create/role_create_page.dart'
 import 'package:private_ai_companion/features/chat/widgets/gift_sheet.dart';
 import 'package:private_ai_companion/features/chat/virtual_phone_page.dart';
 import 'package:private_ai_companion/features/chat/video_chat_page.dart';
+import 'package:private_ai_companion/core/life/life_scope.dart';
+import 'package:private_ai_companion/features/life/life_game_page.dart';
 import 'package:private_ai_companion/core/gift/gift_service.dart';
 import 'package:private_ai_companion/core/share/wechat_share_service.dart';
 
@@ -630,6 +632,27 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  /// 直达「这个角色专属」的宠物 / 孩子 / 家族三大板块。
+  ///
+  /// 用户要求每个角色的养育剧情完全分开：从 A 的聊天进来只看到 A 与用户
+  /// 共同养育的宠物和孩子，B 角色不可见。这里把 personaId 作为作用域
+  /// 传下去，而不是打开一个全局页面。
+  Future<void> _openLifeGame() async {
+    final p = _persona;
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LifeGamePage(
+          initialScope: LifeScope.forPersona(
+            widget.personaId,
+            label: p?.name ?? '角色',
+            worldview: p?.worldview ?? 'realistic',
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 合规分享到微信：把当前对话片段导出为纯文本，调起微信分享；
   /// 设备未接入微信分享能力时回退为复制到剪贴板（由用户自行粘贴）。
   /// 不读取任何微信本地数据，不做自动收发 / 外挂式接管。
@@ -1176,6 +1199,10 @@ class _ChatPageState extends State<ChatPage> {
                       icon: const Icon(Icons.videocam_outlined),
                       onPressed: _openVideoChat,
                       tooltip: _l10n.tr('tt_video')),
+                  IconButton(
+                      icon: const Icon(Icons.pets_outlined),
+                      onPressed: _openLifeGame,
+                      tooltip: _l10n.tr('tt_life_scope')),
                   IconButton(
                       icon: const Icon(Icons.share_outlined),
                       onPressed: _shareConversation,
