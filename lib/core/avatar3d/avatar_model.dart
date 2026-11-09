@@ -110,6 +110,11 @@ class AvatarMesh {
   /// App 内生成的模型默认开启，画面更稳。
   final bool contactShadow;
 
+  /// 生成期部件标签的去重集合（face / pupilL / button0 / …），只用于
+  /// 「造型精度下限」门禁与诊断：可量化地证明五官、服饰细节确实存在。
+  /// 不写进 GLB（外部导入模型没有这套标签，回读后为空列表），渲染不依赖它。
+  final List<String> partTags;
+
   AvatarMesh({
     required this.bones,
     required this.positions,
@@ -129,6 +134,7 @@ class AvatarMesh {
     this.specularStrength = 0.0,
     this.rimStrength = 0.0,
     this.contactShadow = false,
+    this.partTags = const <String>[],
   });
 
   int get vertexCount => positions.length ~/ 3;
@@ -396,6 +402,101 @@ class MeshBuilder {
     );
     applyBodyBias(bodyBias);
     applyPersonaVariation(variationSeed);
+    // 表面质感必须最后烘焙：上面的调参 / 肌肉 / 个体差异都会改写 colors，
+    // 提前写渐变会被覆盖成平面色块。
+    applyQualityFinish();
+  }
+
+  /// 程序化表面质感：把渐变、次表面散射、织纹与柔边直接烘焙进顶点色。
+  ///
+  /// 全部由代码计算，不引入任何贴图 / GLB 资产，APK 体积零增长；
+  /// 颜色随 bind pose 一起被骨骼蒙皮携带，旋转视角与动画都自然跟随。
+  /// 这是「造型精度下限」的核心：即使 detail 拉到最低、任何风格下，
+  /// 画面也带连续明暗过渡，而不是低多边形平面色块拼贴。
+  void applyQualityFinish() {
+    final bounds = boundsByTag();
+    for (var v = 0; v < vertexCount; v++) {
+      final tag = tags[v];
+      if (tag.isEmpty) continue;
+      final b = bounds[tag];
+      if (b == null) continue;
+      final hx = (b.max.x - b.min.x) / 2;
+      final hy = (b.max.y - b.min.y) / 2;
+      final hz = (b.max.z - b.min.z) / 2;
+      final cx = (b.min.x + b.max.x) / 2;
+      final cy = (b.min.y + b.max.y) / 2;
+      final cz = (b.min.z + b.max.z) / 2;
+      final px = positions[v * 3];
+      final py = positions[v * 3 + 1];
+      final pz = positions[v * 3 + 2];
+      final u = hx > 1e-5 ? ((px - cx) / hx).clamp(-1.0, 1.0) : 0.0;
+      final w = hy > 1e-5 ? ((py - cy) / hy).clamp(-1.0, 1.0) : 0.0;
+      final d = hz > 1e-5 ? ((pz - cz) / hz).clamp(-1.0, 1.0) : 0.0;
+      var r = colors[v * 4];
+      var g = colors[v * 4 + 1];
+      var bl = colors[v * 4 + 2];
+      var a = colors[v * 4 + 3];
+
+      switch (_surfaceKindOf(tag)) {
+        case _SurfaceKind.skin:
+          // 次表面散射：正面暖亮、侧缘留一层暖红透光；下颌略收暗，
+          // 让圆脸有体积而不是一张平涂的饼。
+          final rimWarm = 0.10 + 0.14 * (1.0 - d.abs());
+          r = r * (1 - rimWarm) + 0.99 * rimWarm;
+          g = g * (1 - rimWarm) + 0.67 * rimWarm;
+          bl = bl * (1 - rimWarm) + 0.55 * rimWarm;
+          final jaw = 1.0 - 0.075 * ((1.0 - w) * 0.5).clamp(0.0, 1.0);
+          r *= jaw;
+          g *= jaw;
+          bl *= jaw;
+        case _SurfaceKind.blush:
+          // 腮红柔边：中心实、边缘渐隐（alpha 参与 srcOver 混合）。
+          final rr = math.sqrt(u * u + w * w).clamp(0.0, 1.0);
+          a *= 1.0 - 0.82 * rr * rr;
+        case _SurfaceKind.eye:
+          // 虹膜径向渐变 + 上眼睑投影；白色高光点不参与，保持纯白。
+          final rr = math.sqrt(u * u + w * w).clamp(0.0, 1.0);
+          final k = 0.94 - 0.20 * rr + 0.07 * w;
+          r *= k;
+          g *= k;
+          bl *= k;
+        case _SurfaceKind.hair:
+          // 发丝分缕：细密明暗条 + 顶部高光，避免一整块死色。
+          final strand = math.sin(u * 8.0 + w * 2.2);
+          final k = 1.0 + 0.05 * strand + 0.08 * w.clamp(0.0, 1.0);
+          r *= k;
+          g *= k;
+          bl *= k;
+          // 右上暖光源：发顶右侧压一笔暖橙，呼应氛围光与高保真参考形象
+          // 的柔光边缘（比单纯加亮更像「被灯照着」而不是「贴了色块」）。
+          final glow =
+              (((u + 1.0) * 0.5) * w.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+          const gw = 0.20;
+          r = r * (1 - gw * glow) + 0.98 * gw * glow;
+          g = g * (1 - gw * glow) + 0.70 * gw * glow;
+          bl = bl * (1 - gw * glow) + 0.48 * gw * glow;
+        case _SurfaceKind.cloth:
+          // 针织 / 牛仔织纹：双频细纹 + 上亮下暗的垂坠感。
+          final weave = math.sin(py * 44.0) * math.sin(px * 36.0);
+          final k = 1.0 + 0.038 * weave + 0.055 * w;
+          r *= k;
+          g *= k;
+          bl *= k;
+        case _SurfaceKind.accent:
+          // 纽扣 / 口袋 / 星饰：中心提亮、边缘压暗，做出小体积感。
+          final rr = math.sqrt(u * u + w * w).clamp(0.0, 1.0);
+          final k = 1.07 - 0.12 * rr;
+          r *= k;
+          g *= k;
+          bl *= k;
+        case _SurfaceKind.neutral:
+          break;
+      }
+      colors[v * 4] = r.clamp(0.0, 1.0);
+      colors[v * 4 + 1] = g.clamp(0.0, 1.0);
+      colors[v * 4 + 2] = bl.clamp(0.0, 1.0);
+      colors[v * 4 + 3] = a.clamp(0.0, 1.0);
+    }
   }
 
   /// 性别化的**体型**差异（肩髋比 / 躯干轮廓），由人设卡的 gender 推导。
@@ -652,8 +753,45 @@ class MeshBuilder {
       frameScale: frameScale,
       rimStrength: rimStrength,
       contactShadow: contactShadow,
+      partTags: tags.where((t) => t.isNotEmpty).toSet().toList()..sort(),
     );
     mesh.computeBindMatrices();
     return mesh;
   }
+}
+
+/// [MeshBuilder.applyQualityFinish] 用的表面分类：只按生成期 tag 前缀判断，
+/// 不依赖人设卡，也不写进 GLB；外部导入模型走 neutral / cloth 的安全兜底。
+enum _SurfaceKind { skin, blush, eye, hair, cloth, accent, neutral }
+
+_SurfaceKind _surfaceKindOf(String t) {
+  if (t.startsWith('blush')) return _SurfaceKind.blush;
+  if (t == 'face' ||
+      t == 'nose' ||
+      t.startsWith('ear') ||
+      t.startsWith('hand') ||
+      t.startsWith('cheek')) {
+    return _SurfaceKind.skin;
+  }
+  if (t.startsWith('eyeWhite') ||
+      t.startsWith('pupil') ||
+      t.startsWith('iris')) {
+    return _SurfaceKind.eye;
+  }
+  if (t.startsWith('hair') ||
+      t.startsWith('fringe') ||
+      t.startsWith('bob') ||
+      t.startsWith('lash') ||
+      t.startsWith('brow')) {
+    return _SurfaceKind.hair;
+  }
+  if (t.startsWith('button') ||
+      t.startsWith('pocket') ||
+      t.startsWith('star') ||
+      t.startsWith('cocoa')) {
+    return _SurfaceKind.accent;
+  }
+  // 白色高光点 / 嘴：保持原有纯色，别给高光染色。
+  if (t.startsWith('spark') || t == 'mouth') return _SurfaceKind.neutral;
+  return _SurfaceKind.cloth;
 }

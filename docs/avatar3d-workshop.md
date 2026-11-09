@@ -321,9 +321,10 @@ armL, armR, handL, handR, legL, legR, prop, none
 
 ---
 
-## 10. 测试映射：11 个 avatar 相关测试文件各自守护什么
+## 10. 测试映射：14 个 avatar 相关测试文件各自守护什么
 
-下表 11 个文件均引用 `lib/core/avatar3d/` 或造型工坊；括号为本次改动后新增的第 12 个。
+下表 14 个文件均引用 `lib/core/avatar3d/` 或造型工坊；标记「精度下限」的两个是
+本轮为「最差造型也必须达标」新增的自动门禁与出图测试。
 
 | 测试文件 | 守护内容 |
 | --- | --- |
@@ -339,16 +340,21 @@ armL, armR, handL, handR, legL, legR, prop, none
 | `performance_budget_test.dart` | 体量/内存/流畅度预算；其中对 `avatar_painter.dart` 做**源码字符串契约**守护（`final List<Facet> drawList = [];`、`final drawList = buffer.drawList`、不得出现 `buffer.facets.sublist(0, visible)`、`if (!gpu) facet.color`）；并守护参数持久化不依赖符号名（混淆后仍可往返）。 |
 | `vrm_import_test.dart` | 外部 VRM/glTF 解码：VRM 1.0 人形骨骼重定向到 22 骨骼、无 skin 静态网格、高面数简化、损坏文件报错；`VrmImportService` 产出可渲染 `AvatarMesh`、`AvatarPainter` 能逐帧蒙皮绘制外部网格、`importGlb` 不再拒绝非 22 骨骼文件。 |
 | `avatar_highlight_and_outfit_test.dart`（**本次新增**） | `inferWardrobeFromPalette` 四类典型配色的确定性映射、兜底打分稳定、空输入/极端 int 不抛异常；`highlightArgb` 命中面变亮 / 未命中面不变 / alpha 不变 / 极端值安全；`AvatarTuningSchema.params.length == 87` 回归护栏。 |
+| `avatar3d_quality_floor_test.dart`（**精度下限**） | `detail` 滑杆下限 / 三风格默认 / 旧存档低精度值都被抬到红线；三风格最差档的三角形数、细节部件数、关键五官与服饰部件、顶点色渐变度；最差档渲染画面颜色层次；提高细分只增精度不丢部件。 |
+| `avatar3d_quality_preview_test.dart`（**精度下限**） | 输出三风格 × `detail` 下限/默认/上限共 9 张 `build/avatar_quality/*.png`，供人工与参考图逐张比对；`*_min` 即用户能拉到的最差造型。 |
 
 ---
 
 ## 11. 已知边界
 
 - **软渲染精细度**：整个渲染器是纯 Dart CPU 实现（22 骨骼 LBS + 透视投影 +
-  逐三角形光照/深度排序 + `dart:ui` `Vertices` 批量提交）。它是低多边形手办级的
-  半写实质感，不是照片级 PBR；`detail` 参数控制细分，`gpu` 路径用顶点色 Gouraud
-  插值、软件路径逐面 `drawPath` 作为无 GPU 环境/回归对照的兜底。30fps 帧缓存
-  （`avatar_view.dart` 的 `_frameIntervalMs = 33`）是为省 CPU/电量，不是刷新率上限。
+  wrap lighting + 深度排序 + `dart:ui` `Vertices` 批量提交）。精度升级后是
+  「高细分 + 程序化渐变 / 织纹 / 次表面散射近似的卡通 3D」，**仍不是照片级
+  PBR**：没有真实贴图、环境光遮蔽、阴影贴图与材质 BRDF，无法逐像素等同
+  31MB 外部高保真 GLB 的 WebGL 渲染（见第 12 节）。`gpu` 路径用顶点色
+  Gouraud 插值、软件路径逐面 `drawPath` 作为无 GPU 环境/回归对照的兜底。
+  30fps 帧缓存（`avatar_view.dart` 的 `_frameIntervalMs = 33`）是为省 CPU/电量，
+  不是刷新率上限。
 - **照片**：只做 4bit 量化直方图取主色（发色 / 衣着 / 点缀 / 肤色倾向），
   **不做人脸扫描、不做照片重建 3D、不识别衣服款式**。本次新增的服饰推断是
   「按配色推荐」，不是「认出照片里穿了什么」；用户随时可手动改回。
@@ -358,4 +364,71 @@ armL, armR, handL, handR, legL, legR, prop, none
 - **外部模型**：`vrm_codec.dart` 会重定向任意骨骼数、简化高面数网格、贴图失败回退材质
   基色；外部模型没有 `personaVisualSpec` 时按中性人设渲染，绝不把 A 的形象套给 B。
 - **参数数量**：`AvatarTuningSchema.params.length == 87` 被多个测试硬断言；
-  本次改动**没有增删任何参数或 key**（`avatar_tuning.dart` 未修改）。
+  精度升级**没有增删任何参数或 key**，只收窄 `detail` 的取值范围（下限
+  0.6 → 1.30）与三风格默认值，并在 `_partInfo` 注册了新增结构部件。
+
+---
+
+## 12. 造型精度下限（最差档验收）
+
+参考基准：`generated_assets/cen_youheng_q_version_preview.png`，对应
+`generated_assets/cen_youheng_q_version.glb`（31MB）+ `<model-viewer>` WebGL PBR
+渲染。**该 GLB 不进 App**：`tools/check_apk_size.py` 限定 `flutter_assets ≤1MB`、
+`assets/` 内禁止 GLB/VRM/GGUF；且 `vrm_codec` 导入外部网格时会简化高面数、
+贴图失败回退材质基色 —— 直接塞进现有管线也渲染不出参考图，还会丢掉 87 项
+调参 / 换装 / 22 骨骼动画。因此采用「程序化升级 + 自动门禁」路线。
+
+### 12.1 四条可量化红线（`avatar3d_quality_floor_test.dart`）
+
+| 指标 | 最差档实测 | 门禁阈值 | 说明 |
+| --- | --- | --- | --- |
+| `detail` 下限 | 1.30 | ≥1.30 | 滑杆、三风格默认、旧存档反序列化值都被抬到红线 |
+| 三角形数 | 18200（Q 版/融合）、20268（写实） | ≥13000 | 圆润曲面，不是 6~8 段截面的块面 |
+| 细节部件数 | 68（Q 版/融合）、47（写实） | ≥40 | 五官/服饰/发丝部件确实生成 |
+| 顶点色 / 画面色层次 | 601~792 / 694 | ≥400 / ≥450 | 证明有连续渐变，不是平面色块 |
+
+另有「关键部件前缀必须存在」清单（face / fringe / eyeWhite / pupil / spark /
+lash / brow / nose / blush / mouth / button / pocket / shoe / hand）与
+「提高细分只增精度、不丢部件」两项。
+
+### 12.2 实现要点
+
+- **细分红线**：`_rangeOf(TuningChannel.detail)` 下限 0.6 → 1.30；三风格默认
+  Q 版 1.40 / 融合 1.55 / 写实 1.70；`AvatarTuning.detail` getter 对任何来源的低值
+  做 clamp，防止旧 GLB extras / 存档把精度拉回去。
+- **程序化质感层**：`MeshBuilder.applyQualityFinish()` 在 `applyTuning()` 最后
+  烘焙进顶点色（必须在调参/肌肉/个体差异之后，否则会被覆盖）。按生成期 tag
+  分类，分别做皮肤次表面散射暖边、腮红 alpha 柔边、虹膜径向渐变、发丝分缕 +
+  右上暖光、针织/牛仔双频织纹、纽扣/口袋/星饰体积感。**零贴图资产、APK 体积
+  零增长**，渐变随 bind pose 一起被骨骼蒙皮携带。
+- **着色**：`AvatarPainter` 两条路径统一为 wrap lighting；菲涅尔轮廓光由冷白
+  改暖橙（呼应「深夜电台 / 热可可」人设与右上暖光源）；接触阴影增加一层
+  更宽更淡的外晕。
+- **造型结构**：连续刘海底片 + 扁宽分缕 + 包颊 bob 侧发（取代「四个丸子」）；
+  竖长 V 领内搭 + 双门襟 + 领尖（取代胸口白球）；扁平口袋与袋口罗纹；肩头球、
+  袖口、裤脚收口；裤腿星形贴布；鞋头暖色包边与鞋底暗边；暖棕虹膜与双高光。
+  星形贴片修正了屏幕 y 翻转导致的背面剔除（此前两处星饰一直隐形）。
+- **新增部件必须注册 `_partInfo`**：`applyAvatarTuning` 只变换注册表里的 tag，
+  漏注册会让刘海/侧发/门襟不跟随 `headSize` 与体型调参而撕裂。
+- **性能**：`avatar3d_perf_test.dart` 改为「每千三角形」归一化门禁（旧基线
+  soft≈4.95ms/千、gpu≈1.38ms/千），因为几何变精细后绝对耗时同比上升属预期，
+  归一化才能区分「更精细」与「算法退化」；阈值含 CI 多文件并行余量。
+
+### 12.3 人工验收流程
+
+```bash
+flutter test test/avatar3d_quality_preview_test.dart
+# → build/avatar_quality/{chibi,hybrid,realistic}_{min,default,max}.png
+```
+
+`*_min.png` 就是用户能拉到的**最差造型**，需与参考图逐张比对；确认通过后
+`avatar3d_quality_floor_test.dart` 的阈值即为固化后的自动门禁，由 CI 的
+quality job 每次全量测试执行。若要调整视觉方向，先改渲染/几何 → 重新出图
+确认 → 再上调门禁阈值，顺序不可倒置。
+
+### 12.4 诚实边界
+
+这条路线给出的是「完成度接近参考形象的可爱 Q 版 3D」，**不是** PBR 级复刻：
+发丝仍是连续曲面而非逐根几何，布料是程序化织纹而非真实贴图，手脚仍偏圆润，
+光照没有真实环境反射与软阴影贴图。若必须逐像素贴近 31MB GLB，需要放宽包体
+红线并引入 GPU/PBR 渲染器，那会牺牲参数化生成、换装与骨骼动画（本轮未采用）。

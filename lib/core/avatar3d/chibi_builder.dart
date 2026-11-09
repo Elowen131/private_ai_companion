@@ -109,10 +109,13 @@ AvatarMesh buildChibiAvatar(
   // 肤色由人设指纹派生 + 照片主色校正，始终落在健康色域内。
   final skin = skinColorFor(s.fingerprint, pal);
   final skinShade = Color.lerp(skin, const Color(0xFFD8A88E), 0.32)!;
-  const eyeDark = Color(0xFF3A3348);
+  // 暖棕虹膜：参考高保真形象是浅棕外圈 + 深棕瞳心，顶点色渐变
+  // （applyQualityFinish 的 eye 分支）会再叠一层径向过渡。
+  const eyeDark = Color(0xFF6B4A38);
   final blush = const Color(0xFFFF9FB0).withValues(alpha: 0.78);
   const inner = Color(0xFFF6F1E8);
   final shoe = night ? const Color(0xFF3C4A6B) : const Color(0xFF7D8A9C);
+  final shoeTrim = Color.lerp(shoe, accent, 0.55)!;
 
   // ── 身体（针织开衫 / 按身份推导的上衣） ──────────────────────────
   mb.tag('torso');
@@ -137,19 +140,42 @@ AvatarMesh buildChibiAvatar(
   final wardrobe = t.wardrobe;
   final openFront = wardrobe == AvatarWardrobe.cozyKnit ||
       wardrobe == AvatarWardrobe.shirtJacket;
-  // 领型：开衫/衬衫露白色内搭，卫衣/家居服是同色圆领。
+  // 领型：开衫/衬衫露出的是一条竖长 V 形内搭，不是胸口一个白球。
+  // 结构精度是「最差档」验收项之一，见 docs/avatar3d-workshop.md。
   mb.tag('collar');
   mb.sphere(
-    center: const Vec3(0, 1.52, 0.24),
+    center: const Vec3(0, 1.40, 0.30),
     radius: openFront
-        ? const Vec3(0.22, 0.17, 0.12)
+        ? const Vec3(0.185, 0.30, 0.10)
         : const Vec3(0.235, 0.10, 0.115),
     color: openFront ? inner : knitDark,
     bone: AvatarBones.chest,
-    lat: 8,
-    lon: 12,
+    lat: 10,
+    lon: 16,
   );
   if (openFront) {
+    // 两片门襟沿内搭左右压边，形成开衫真正「敞开」的层次。
+    for (final sign in [-1.0, 1.0]) {
+      mb.tag(sign < 0 ? 'placketL' : 'placketR');
+      mb.sphere(
+        center: Vec3(sign * 0.185, 1.36, 0.375),
+        radius: const Vec3(0.062, 0.34, 0.065),
+        color: knit,
+        bone: AvatarBones.chest,
+        lat: 9,
+        lon: 12,
+      );
+    }
+    // V 领收尖：内搭下端不能是平头。
+    mb.tag('collarTip');
+    mb.sphere(
+      center: const Vec3(0, 1.10, 0.375),
+      radius: const Vec3(0.10, 0.075, 0.045),
+      color: inner,
+      bone: AvatarBones.chest,
+      lat: 7,
+      lon: 10,
+    );
     for (var k = 0; k < 3; k++) {
       mb.tag('button$k');
       mb.sphere(
@@ -169,8 +195,18 @@ AvatarMesh buildChibiAvatar(
       mb.tag(sign < 0 ? 'pocketL' : 'pocketR');
       mb.sphere(
         center: Vec3(sign * 0.30, 1.05, 0.30),
-        radius: const Vec3(0.11, 0.085, 0.055),
+        radius: const Vec3(0.13, 0.095, 0.035),
         color: knitDark,
+        bone: AvatarBones.chest,
+        lat: 7,
+        lon: 12,
+      );
+      // 袋口罗纹边，扁平贴片而非两个凸起的圆球。
+      mb.tag(sign < 0 ? 'pocketEdgeL' : 'pocketEdgeR');
+      mb.sphere(
+        center: Vec3(sign * 0.30, 1.135, 0.325),
+        radius: const Vec3(0.135, 0.022, 0.038),
+        color: knit,
         bone: AvatarBones.chest,
         lat: 6,
         lon: 10,
@@ -211,6 +247,16 @@ AvatarMesh buildChibiAvatar(
     final shoulder = Vec3(side * 0.44, 1.50, 0);
     final elbow = Vec3(side * 0.62, 1.18, 0);
     final wrist = Vec3(side * 0.68, 0.94, 0);
+    // 肩头球：消掉圆柱与躯干之间的硬接缝。
+    mb.tag(isLeft ? 'shoulderL' : 'shoulderR');
+    mb.sphere(
+      center: shoulder,
+      radius: const Vec3(0.16, 0.16, 0.16),
+      color: knit,
+      bone: upper,
+      lat: 8,
+      lon: 10,
+    );
     mb.tag(isLeft ? 'upperArmL' : 'upperArmR');
     mb.taperedCylinder(
       bottom: shoulder,
@@ -238,6 +284,16 @@ AvatarMesh buildChibiAvatar(
       bone: fore,
       lat: 8,
       lon: 10,
+    );
+    // 袖口罗纹：手腕处一圈收口，手臂不再是一根到头的直棍。
+    mb.tag(isLeft ? 'cuffL' : 'cuffR');
+    mb.sphere(
+      center: Vec3(side * 0.68, 0.965, 0),
+      radius: const Vec3(0.118, 0.055, 0.118),
+      color: knitDark,
+      bone: fore,
+      lat: 7,
+      lon: 12,
     );
     mb.tag(isLeft ? 'handL' : 'handR');
     mb.sphere(
@@ -274,6 +330,24 @@ AvatarMesh buildChibiAvatar(
       lat: 8,
       lon: 10,
     );
+    // 裤脚收口 + 裤腿星形贴布（参考形象的两颗暖橙星）。
+    mb.tag(isLeft ? 'hemL' : 'hemR');
+    mb.sphere(
+      center: Vec3(side * 0.18, 0.30, 0),
+      radius: const Vec3(0.155, 0.06, 0.155),
+      color: knit,
+      bone: leg,
+      lat: 7,
+      lon: 12,
+    );
+    _addStarPatch(
+      mb,
+      isLeft ? 'starPatchL' : 'starPatchR',
+      Vec3(side * 0.18, 0.62, 0.192),
+      isLeft ? 0.105 : 0.088,
+      accent,
+      leg,
+    );
     mb.tag(isLeft ? 'shoeL' : 'shoeR');
     mb.sphere(
       center: Vec3(side * 0.18, 0.18, 0.055),
@@ -283,9 +357,30 @@ AvatarMesh buildChibiAvatar(
       lat: 8,
       lon: 12,
     );
+    // 鞋头暖色包边 + 鞋底暗边，让鞋有前后层次而不是一个球。
+    mb.tag(isLeft ? 'shoeToeL' : 'shoeToeR');
+    mb.sphere(
+      center: Vec3(side * 0.18, 0.165, 0.245),
+      radius: const Vec3(0.145, 0.072, 0.072),
+      color: shoeTrim,
+      bone: foot,
+      lat: 7,
+      lon: 10,
+    );
+    mb.tag(isLeft ? 'shoeSoleL' : 'shoeSoleR');
+    mb.sphere(
+      center: Vec3(side * 0.18, 0.095, 0.075),
+      radius: const Vec3(0.195, 0.045, 0.245),
+      color: knitDark,
+      bone: foot,
+      lat: 7,
+      lon: 12,
+    );
   }
 
-  // ── 头：先发壳，再用前置脸部椭球「切」出发际线 ──────────────────
+  // ── 头：波波头发壳 → 前置脸 → 连续刘海带 → 包颊侧发 ─────────────
+  // 结构精度是「最差档」验收项：不允许「头上顶几个圆球」的积木感，
+  // 发丝必须是连续片/带，并包住脸颊形成 bob 轮廓。
   mb.tag('hairShell');
   mb.sphere(
     center: const Vec3(0, 2.44, -0.17),
@@ -295,6 +390,7 @@ AvatarMesh buildChibiAvatar(
     lat: 12,
     lon: 18,
     topColor: hairHi,
+    lowerTaper: 0.10,
   );
   mb.tag('face');
   mb.sphere(
@@ -304,24 +400,46 @@ AvatarMesh buildChibiAvatar(
     bone: AvatarBones.head,
     lat: 12,
     lon: 18,
+    lowerTaper: 0.12,
   );
-  // 刘海：额前几缕
-  final fringes = [-0.34, -0.10, 0.14, 0.36];
+  // 连续刘海底片：一整条弧形额发，而不是四个互不相干的圆球。
+  mb.tag('fringeBand');
+  mb.sphere(
+    center: const Vec3(0, 2.79, 0.57),
+    radius: const Vec3(0.60, 0.14, 0.155),
+    color: hair,
+    bone: AvatarBones.head,
+    lat: 8,
+    lon: 20,
+    topColor: hairHi,
+  );
+  // 额前分缕：扁而宽、彼此重叠，沿发际线压在底片上做出分缝。
+  final fringes = [-0.33, -0.11, 0.11, 0.33];
   for (var i = 0; i < fringes.length; i++) {
     mb.tag('fringe$i');
     mb.sphere(
-      center: Vec3(fringes[i], 2.79, 0.60),
-      radius: const Vec3(0.175, 0.135, 0.13),
-      color: hair,
+      center: Vec3(fringes[i], 2.775 + 0.018 * fringes[i], 0.635),
+      radius: const Vec3(0.205, 0.10, 0.085),
+      color: i.isEven ? hair : hairHi,
       bone: AvatarBones.head,
       lat: 7,
-      lon: 10,
+      lon: 12,
     );
   }
-  // 两侧发束（各自骨骼，可随动作摆动）
   for (final side in [-1.0, 1.0]) {
     final bone = side < 0 ? AvatarBones.hairL : AvatarBones.hairR;
     final joint = joints[bone];
+    // 包颊侧发（bob 的内扣发尾）：把脸的两侧收进发廓里。
+    mb.tag(side < 0 ? 'bobL' : 'bobR');
+    mb.sphere(
+      center: Vec3(side * 0.575, 2.15, 0.20),
+      radius: const Vec3(0.16, 0.36, 0.28),
+      color: hair,
+      bone: bone,
+      lat: 9,
+      lon: 14,
+    );
+    // 原侧发束保留（骨骼摆动用），与包颊片叠成有厚度的发梢。
     mb.tag(side < 0 ? 'hairL' : 'hairR');
     mb.sphere(
       center: Vec3(joint.x, joint.y - 0.10, joint.z + 0.02),
@@ -354,7 +472,7 @@ AvatarMesh buildChibiAvatar(
     mb.tag('eyeWhite$l');
     mb.sphere(
       center: Vec3(x, 2.365, 0.655),
-      radius: const Vec3(0.165, 0.205, 0.075),
+      radius: const Vec3(0.175, 0.215, 0.075),
       color: const Color(0xFFFDFBFF),
       bone: bone,
       lat: 8,
@@ -363,12 +481,13 @@ AvatarMesh buildChibiAvatar(
     mb.tag('pupil$l');
     mb.sphere(
       center: Vec3(x, 2.35, 0.712),
-      radius: const Vec3(0.108, 0.148, 0.055),
+      radius: const Vec3(0.118, 0.158, 0.055),
       color: eyeDark,
       bone: bone,
       lat: 8,
       lon: 12,
     );
+    // 双高光：主点 + 下方小点，是「眼神有光」最便宜也最关键的一笔。
     mb.tag('spark$l');
     mb.sphere(
       center: Vec3(x - 0.042, 2.415, 0.758),
@@ -377,6 +496,15 @@ AvatarMesh buildChibiAvatar(
       bone: bone,
       lat: 6,
       lon: 8,
+    );
+    mb.tag('sparkLow$l');
+    mb.sphere(
+      center: Vec3(x + 0.058, 2.302, 0.766),
+      radius: const Vec3(0.019, 0.023, 0.014),
+      color: const Color(0xFFFFFFFF),
+      bone: bone,
+      lat: 5,
+      lon: 7,
     );
     mb.tag('lash$l');
     mb.sphere(
@@ -483,7 +611,9 @@ void _addStar(MeshBuilder mb, Color accent) {
     );
   }
   for (var k = 0; k < 10; k++) {
-    mb.tri(start, start + 1 + k, start + 1 + ((k + 1) % 10));
+    // 屏幕 y 向下翻转：数学上逆时针的扇形在投影后 area<0 会被背面剔除，
+    // 必须反绕序才能显示（两处星形曾因此一直隐形）。
+    mb.tri(start, start + 1 + ((k + 1) % 10), start + 1 + k);
   }
 }
 
@@ -519,4 +649,40 @@ void _addCocoa(MeshBuilder mb, Color accent) {
     lat: 6,
     lon: 8,
   );
+}
+
+/// 扁平星形贴布：裤腿 / 袖口上的小刺绣，法线朝 +Z，随所属骨骼一起动。
+/// 与胸前 [_addStar] 的区别是位置、大小、骨骼都可注入，且贴片更薄。
+void _addStarPatch(
+  MeshBuilder mb,
+  String tag,
+  Vec3 center,
+  double r,
+  Color color,
+  int bone,
+) {
+  final start = mb.vertexCount;
+  const n = Vec3(0, 0, 1);
+  mb.tag(tag);
+  mb.vertex(center, n, color, [bone, 0, 0, 0], const [1, 0, 0, 0]);
+  for (var k = 0; k < 10; k++) {
+    final a = -math.pi / 2 + k * math.pi / 5;
+    final rad = k.isEven ? r : r * 0.45;
+    mb.vertex(
+      Vec3(
+        center.x + math.cos(a) * rad,
+        center.y + math.sin(a) * rad,
+        center.z + 0.008,
+      ),
+      n,
+      color,
+      [bone, 0, 0, 0],
+      const [1, 0, 0, 0],
+    );
+  }
+  for (var k = 0; k < 10; k++) {
+    // 屏幕 y 向下翻转：数学上逆时针的扇形在投影后 area<0 会被背面剔除，
+    // 必须反绕序才能显示（两处星形曾因此一直隐形）。
+    mb.tri(start, start + 1 + ((k + 1) % 10), start + 1 + k);
+  }
 }

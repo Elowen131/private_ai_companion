@@ -198,7 +198,10 @@ double _neutralOf(TuningChannel c) => switch (c) {
       TuningChannel.sx ||
       TuningChannel.sy ||
       TuningChannel.sz => (min: 0.5, max: 1.6),
-      TuningChannel.detail => (min: 0.6, max: 2.2),
+      // 造型精度红线：滑杆最低档也必须是圆润曲面，不能退化成低多边形块面。
+      // 0.6 档曾让头/手/衣只剩 6~8 段截面，是「最差精度不达标」的根因。
+      // 下限 1.30 由 test/avatar3d_quality_floor_test.dart 硬断言守护。
+      TuningChannel.detail => (min: 1.30, max: 2.2),
       TuningChannel.muscle => (min: 0.0, max: 1.0),
       TuningChannel.cameraZoom => (min: 0.6, max: 1.8),
       TuningChannel.hue => (min: -0.5, max: 0.5),
@@ -343,8 +346,10 @@ abstract final class AvatarTuningSchema {
     _p('irisHue', '瞳色色相', TuningGroup.face, '@pupils', [TuningChannel.hue]),
     _p('lipHue', '唇色色相', TuningGroup.face, '@mouth', [TuningChannel.hue]),
     _p('outfitHue', '衣服色相', TuningGroup.face, '@torso', [TuningChannel.hue]),
+    // 三风格默认细分整体抬到精度红线之上，并保持 Q 版 < 融合 < 写实：
+    // 写实档部件最多、几何最密，理应拿到最高细分。
     _p('detail', '网格细腻度', TuningGroup.face, '@all', [TuningChannel.detail],
-        realistic: 1.30, chibi: 1.0, hybrid: 1.35),
+        realistic: 1.70, chibi: 1.40, hybrid: 1.55),
 
     // ── 肌肉与体表线条 ────────────────────────────────────────────
     // 这组不走缩放/旋转，而是对命中区域的顶点沿法线做局部起伏，
@@ -618,7 +623,9 @@ class AvatarTuning {
   double get viewYaw => value('cameraYaw') * 0.9;
   double get viewPitch => 0.06 + value('cameraPitch') * 0.5;
   double get viewZoom => value('cameraZoom').clamp(0.6, 1.8);
-  double get detail => value('detail').clamp(0.6, 2.2);
+  /// 精度红线：任何来源（反序列化 / GLB extras / 旧存档）的低 detail 值
+  /// 都在这里被抬到下限，保证「最差造型」也不会退回低多边形块面。
+  double get detail => value('detail').clamp(1.30, 2.2);
 
   AvatarTuning withValue(String key, double v) {
     final p = AvatarTuningSchema.byKey[key];
@@ -767,6 +774,55 @@ Map<String, _Part> get _partInfo => {
       'cocoaCup': const _Part(['props', 'cocoa'], Vec3(0.80, 0.88, 0.12)),
       'cocoaTop': const _Part(['props', 'cocoa'], Vec3(0.80, 0.98, 0.12)),
       'cocoaHandle': const _Part(['props', 'cocoa'], Vec3(0.915, 0.88, 0.12)),
+      // ── 造型精度升级新增的结构部件 ────────────────────────────────
+      // 必须逐个注册：applyAvatarTuning 只对 _partInfo 里的 tag 做变换，
+      // 漏注册会让新部件完全不跟随 headSize / 体型 / 角度调参 —— 缩小头部时
+      // 刘海与侧发会飘在头外，调肩宽时袖口和门襟会撕裂。
+      // 由 test/avatar_studio_test.dart「头部缩放是整体变换」守护。
+      'fringeBand':
+          const _Part([_h, 'hair', 'fringe'], Vec3(0, 2.79, 0.57)),
+      'bobL': const _Part([_h, 'hair', 'hairSides', 'hairSideL'],
+          Vec3(-0.575, 2.15, 0.20), mirror: -1),
+      'bobR': const _Part([_h, 'hair', 'hairSides', 'hairSideR'],
+          Vec3(0.575, 2.15, 0.20), mirror: 1),
+      'sparkLowL': const _Part([_h, _f, 'eyes', 'sparks'],
+          Vec3(-0.177, 2.302, 0.766), mirror: -1),
+      'sparkLowR': const _Part([_h, _f, 'eyes', 'sparks'],
+          Vec3(0.293, 2.302, 0.766), mirror: 1),
+      'placketL': const _Part(['body', 'torso'],
+          Vec3(-0.185, 1.36, 0.375), mirror: -1),
+      'placketR': const _Part(['body', 'torso'],
+          Vec3(0.185, 1.36, 0.375), mirror: 1),
+      'collarTip':
+          const _Part(['body', 'torso'], Vec3(0, 1.10, 0.375)),
+      'pocketEdgeL': const _Part(['body', 'torso'],
+          Vec3(-0.30, 1.135, 0.325), mirror: -1),
+      'pocketEdgeR': const _Part(['body', 'torso'],
+          Vec3(0.30, 1.135, 0.325), mirror: 1),
+      'shoulderL': const _Part(['body', 'arms', 'armL', 'upperArms'],
+          Vec3(-0.44, 1.50, 0), mirror: -1),
+      'shoulderR': const _Part(['body', 'arms', 'armR', 'upperArms'],
+          Vec3(0.44, 1.50, 0), mirror: 1),
+      'cuffL': const _Part(['body', 'arms', 'armL', 'forearms'],
+          Vec3(-0.68, 0.965, 0), mirror: -1),
+      'cuffR': const _Part(['body', 'arms', 'armR', 'forearms'],
+          Vec3(0.68, 0.965, 0), mirror: 1),
+      'hemL': const _Part(['body', 'legs', 'legL', 'thighs'],
+          Vec3(-0.18, 0.30, 0), mirror: -1),
+      'hemR': const _Part(['body', 'legs', 'legR', 'thighs'],
+          Vec3(0.18, 0.30, 0), mirror: 1),
+      'starPatchL': const _Part(['body', 'legs', 'legL', 'thighs'],
+          Vec3(-0.18, 0.62, 0.192), mirror: -1),
+      'starPatchR': const _Part(['body', 'legs', 'legR', 'thighs'],
+          Vec3(0.18, 0.62, 0.192), mirror: 1),
+      'shoeToeL': const _Part(['body', 'legs', 'legL', 'feet', 'footL'],
+          Vec3(-0.18, 0.165, 0.245), mirror: -1),
+      'shoeToeR': const _Part(['body', 'legs', 'legR', 'feet', 'footR'],
+          Vec3(0.18, 0.165, 0.245), mirror: 1),
+      'shoeSoleL': const _Part(['body', 'legs', 'legL', 'feet', 'footL'],
+          Vec3(-0.18, 0.095, 0.075), mirror: -1),
+      'shoeSoleR': const _Part(['body', 'legs', 'legR', 'feet', 'footR'],
+          Vec3(0.18, 0.095, 0.075), mirror: 1),
     };
 
 /// 供测试与 UI 校验：某个参数目标是否至少命中一个部件。

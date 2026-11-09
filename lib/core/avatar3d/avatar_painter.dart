@@ -218,8 +218,11 @@ class AvatarPainter extends CustomPainter {
         final nl = math.sqrt(nxY * nxY + nyX * nyX + nzX * nzX);
         final inv = nl > 1e-6 ? 1 / nl : 0;
         final diff = (nxY * lightNorm.x + nyX * lightNorm.y + nzX * lightNorm.z) * inv;
-        final shade = _materialShade(
-            0.62 + 0.38 * (diff * 0.5 + 0.5), diff, 0.45);
+        // Wrap lighting：把硬朗的半兰伯特换成柔和过渡，背光面不再一刀切，
+        // 同时拉开亮暗层次，让高细分曲面读得出体积；皮肤的次表面散射感
+        // 已烘焙在顶点色里（见 MeshBuilder.applyQualityFinish）。
+        final wrap = ((diff + 0.32) / 1.32).clamp(0.0, 1.0);
+        final shade = _materialShade(0.52 + 0.48 * wrap, diff, 0.44);
         var r = colors[v * 4] * shade;
         var g = colors[v * 4 + 1] * shade;
         var b = colors[v * 4 + 2] * shade;
@@ -229,9 +232,11 @@ class AvatarPainter extends CustomPainter {
           final nz = nzX.clamp(-1.0, 1.0);
           final fres = (1 - nz) * (1 - nz); // 0=正对相机，1=侧缘
           final rim = fres * fres * mesh.rimStrength;
-          r += rim * 0.85;
-          g += rim * 0.90;
-          b += rim * 1.0;
+          // 暖色轮廓光：与「深夜电台 / 热可可」人设及右上暖光源一致，
+          // 比冷白更贴近高保真参考形象的柔光边缘。
+          r += rim * 1.0;
+          g += rim * 0.72;
+          b += rim * 0.45;
         }
         if (moodTint > 0) {
           r = r * (1 - moodTint) + tint.r * moodTint;
@@ -275,8 +280,9 @@ class AvatarPainter extends CustomPainter {
       final nl = math.sqrt(nxY * nxY + nyX * nyX + nzX * nzX);
       final inv = nl > 1e-6 ? 1 / nl : 0;
       final diff = (nxY * lightNorm.x + nyX * lightNorm.y + nzX * lightNorm.z) * inv;
-      final shade = _materialShade(
-          0.58 + 0.42 * (diff * 0.5 + 0.5), diff, 0.42);
+      // 与 GPU 路径保持同一套 wrap lighting，软件兜底画面不能与主路径分家。
+      final wrap = ((diff + 0.32) / 1.32).clamp(0.0, 1.0);
+      final shade = _materialShade(0.52 + 0.48 * wrap, diff, 0.42);
 
       var r = colors[i0 * 4] + colors[i1 * 4] + colors[i2 * 4];
       var g = colors[i0 * 4 + 1] + colors[i1 * 4 + 1] + colors[i2 * 4 + 1];
@@ -290,9 +296,10 @@ class AvatarPainter extends CustomPainter {
         final nz = nzX.clamp(-1.0, 1.0);
         final fres = (1 - nz) * (1 - nz);
         final rim = fres * fres * mesh.rimStrength;
-        r += rim * 0.85;
-        g += rim * 0.90;
-        b += rim * 1.0;
+        // 与 GPU 顶点光照同一套暖色权重，两条路径画面不能分家。
+        r += rim * 1.0;
+        g += rim * 0.72;
+        b += rim * 0.45;
       }
       if (moodTint > 0) {
         r = r * (1 - moodTint) + tint.r * moodTint;
@@ -477,6 +484,25 @@ class AvatarPainter extends CustomPainter {
       center: Offset(cx, cy),
       width: rx * 2,
       height: ry * 2,
+    );
+    // 先铺一层更宽更淡的外晕，再叠核心暗部：角色像被环境光托住，
+    // 而不是脚底硬贴一块黑饼（高保真参考图的关键质感之一）。
+    final halo = Rect.fromCenter(
+      center: Offset(cx, cy),
+      width: rx * 3.0,
+      height: ry * 3.4,
+    );
+    canvas.drawOval(
+      halo,
+      Paint()
+        ..shader = const RadialGradient(
+          colors: [
+            Color(0x16000000),
+            Color(0x08000000),
+            Colors.transparent,
+          ],
+          stops: [0.0, 0.50, 1.0],
+        ).createShader(halo),
     );
     canvas.drawOval(
       rect,
