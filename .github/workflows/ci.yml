@@ -14,9 +14,14 @@
 #    Development Team（见 docs/ops-ci-setup.md）。
 #  - Android 直接用 GitHub ubuntu runner 预装的 Android SDK + sdkmanager 安装 NDK 与
 #    compileSdk 平台，不再使用 android-actions/setup-android（其会安装已下架的 tools 包而失败）。
+#  - Gradle wrapper 三件套（android/gradlew、gradlew.bat、gradle/wrapper/gradle-wrapper.jar）
+#    必须随仓库入库：Flutter 模板的 android/.gitignore 默认忽略它们，本机虽存在（本地生成），
+#    CI checkout 后却没有，`./gradlew` 会报 "No such file or directory"。行尾与可执行位
+#    由根 .gitattributes + git 100755 约束，与开发者本机 git 配置无关。
 #  - Gradle wrapper 分发版（gradle-9.3.1-all.zip，约 225MB）单独用 actions/cache 缓存，
 #    并带预热重试：services.gradle.org 会 302 到 GitHub Releases，代理偶发 502/504
 #    会在冷启动时直接打断 assembleRelease；flutter-action 的 cache:true 不覆盖该目录。
+#    预热步骤只对匹配 5xx/超时的瞬时故障重试，文件缺失/权限/其它错误立即失败。
 #  - iOS 端侧推理底座已从 llm_llamacpp 迁移到 llamadart：llm_llamacpp 0.7.0 的 iOS 原生库
 #    路径损坏（预编译包缺 llama.framework、源码构建不产出 framework 目录、hook 每次强制
 #    重下载覆盖缓存），无法在 CI 构建；llamadart 自带维护良好的 iOS 原生资产（XCFramework +
@@ -161,21 +166,39 @@ jobs:
           restore-keys: |
             gradle-wrapper-${{ runner.os }}-
 
-      - name: Warm Gradle wrapper (retry on transient 502/504)
-        # 缓存未命中时显式预热：失败后清掉 .part 残片（否则 wrapper 会一直尝试
-        # 断点续传坏文件），再按 10/20/30/40s 退避重试。把「一次网络抖动打掉
-        # 整条 45min 生产构建」变成最多 5 次可恢复的重试。
+      - name: Warm Gradle wrapper (validate files, retry on transient 502/504)
+        # 前置校验比重试更重要：Flutter 模板的 android/.gitignore 曾忽略 gradlew /
+        # gradlew.bat / gradle-wrapper.jar，CI checkout 后 `./gradlew` 直接报
+        # "No such file or directory"，盲目重试 5 次只会白等 100s 并误判成网络故障。
+        # 这里先断言三件套、补可执行位（Windows core.filemode=false 会丢 +x）与 LF
+        # 行尾（CRLF 会让 Linux 报 bad interpreter），再只对瞬时网络错误做退避重试。
         run: |
           set -euo pipefail
           cd android
+          LOG="${RUNNER_TEMP:-/tmp}/gradlew-warm.log"
+          for f in ./gradlew ./gradlew.bat gradle/wrapper/gradle-wrapper.jar; do
+            test -f "$f" || {
+              echo "::error::$f 未随仓库检出；检查 .gitignore / .gitattributes，勿误判为网络 502/504"
+              exit 1
+            }
+          done
+          chmod +x ./gradlew
+          if LC_ALL=C grep -q $'\r' ./gradlew; then
+            echo "::warning::gradlew 含 CRLF，已就地转为 LF（.gitattributes 应已保证 eol=lf）"
+            sed -i 's/\r$//' ./gradlew
+          fi
           for attempt in 1 2 3 4 5; do
-            if ./gradlew --version > "$RUNNER_TEMP/gradlew-warm.log" 2>&1; then
+            if ./gradlew --version > "$LOG" 2>&1; then
               echo "Gradle wrapper ready (attempt $attempt)"
-              grep -A2 '^Gradle ' "$RUNNER_TEMP/gradlew-warm.log" || true
+              grep -A2 '^Gradle ' "$LOG" || true
               exit 0
             fi
+            tail -n 12 "$LOG" || true
+            if ! grep -Eq 'HTTP response code: (50[0-9]|42[0-9])|502|504|Connection (reset|timed out)|Read timed out|SocketTimeout|Could not (download|GET|resolve)' "$LOG"; then
+              echo "::error::Gradle wrapper 启动失败且非瞬时网络故障（见上方日志），立即终止重试"
+              exit 1
+            fi
             echo "::warning::Gradle distribution download failed (attempt $attempt/5)"
-            tail -n 12 "$RUNNER_TEMP/gradlew-warm.log" || true
             find "$HOME/.gradle/wrapper/dists" -name '*.part' -delete 2>/dev/null || true
             sleep $((attempt * 10))
           done

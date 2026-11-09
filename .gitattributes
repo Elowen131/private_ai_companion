@@ -1,0 +1,9 @@
+# 跨平台行尾 / 属性约束：Gradle wrapper 必须能在 Linux CI runner 上直接执行。
+#
+# 背景：本机 Windows 上 core.autocrlf=true、core.filemode=false。前者可能把 CRLF
+# 写进 gradlew，导致 Linux 上报 `/usr/bin/env bash\r: bad interpreter`；后者会让
+# git 以 100644 记录 gradlew，checkout 后没有 +x，执行时报 "Permission denied"。
+# 显式声明后，CI 行为与开发者本机 git 配置解耦。
+android/gradlew                              text eol=lf
+android/gradlew.bat                          text eol=crlf
+android/gradle/wrapper/gradle-wrapper.jar    binary

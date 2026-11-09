@@ -1,8 +1,11 @@
-gradle-wrapper.jar
+# ---------------- Gradle wrapper ----------------
+# Flutter 默认模板会忽略 gradlew / gradlew.bat / gradle-wrapper.jar，但 CI 的
+# actions/checkout 只取已跟踪文件：忽略它们会让 android/gradlew 在 runner 上不存在，
+# `./gradlew --version` 直接报 "No such file or directory"，重试 5 次也毫无意义。
+# 本机有这三个文件纯属本地生成，不能作为 CI 可用性的依据，因此必须入库（jar 仅 53KB）。
+# 行尾与可执行位由仓库根 .gitattributes 统一约束，与开发者本机 git 配置无关。
 /.gradle
 /captures/
-/gradlew
-/gradlew.bat
 /local.properties
 GeneratedPluginRegistrant.java
 .cxx/

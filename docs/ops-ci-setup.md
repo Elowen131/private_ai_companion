@@ -36,6 +36,15 @@
   3. `flutter build apk --release` —— **无签名密钥时自动回退 debug 签名**，仅验证编译链路
   4. `flutter build appbundle --release` —— 产出 Play Store 上架标准 AAB（同样回退 debug 签名）
   5. 上传 `app-release.apk` 与 `app-release.aab` 作为校验产物（`if-no-files-found: ignore`）
+  - **Gradle wrapper 三件套必须入库**：`android/gradlew`、`android/gradlew.bat`、
+    `android/gradle/wrapper/gradle-wrapper.jar`。Flutter 模板的 `android/.gitignore` 默认忽略它们，
+    本机虽有文件（本地生成），CI `checkout` 后却没有 —— 曾导致预热步骤连报 5 次
+    `./gradlew: No such file or directory`，并被误判为代理 502/504。现由根 `.gitattributes`
+    锁定 `gradlew` 为 `eol=lf`、jar 为 `binary`，并由 git 记录 `100755` 可执行位
+    （Windows `core.filemode=false` 会丢 +x）。预热步骤先校验文件/权限/行尾，只对真正的
+    瞬时网络故障退避重试；`gradle-9.3.1-all.zip`（225MB）另用 `actions/cache` 缓存。
+    自查：`git ls-files android/gradlew android/gradlew.bat android/gradle/wrapper/gradle-wrapper.jar`
+    须返回 3 行，`git ls-files -s android/gradlew` 须为 `100755`。
 - **Job `build-ios`**（需 quality 通过，macOS runner）：
   1. `subosito/flutter-action` 装 Flutter（开启 pub 缓存）
   2. 确保 CocoaPods 可用（`brew install cocoapods`，GitHub macOS runner 未必预装）
