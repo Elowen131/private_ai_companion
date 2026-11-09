@@ -45,6 +45,22 @@
     瞬时网络故障退避重试；`gradle-9.3.1-all.zip`（225MB）另用 `actions/cache` 缓存。
     自查：`git ls-files android/gradlew android/gradlew.bat android/gradle/wrapper/gradle-wrapper.jar`
     须返回 3 行，`git ls-files -s android/gradlew` 须为 `100755`。
+  - **⚠️ 不要用旧失败任务的 "Re-run jobs" 验证修复**：GitHub 重跑沿用**原始 SHA 与原始
+    workflow 文件**，即使 `main` 已经修好，重跑仍会执行旧的五连重试脚本并复现
+    `./gradlew: No such file or directory`，看起来像「改了没用」。判断依据：日志里的
+    `run:` 脚本若与仓库当前 `.github/workflows/ci.yml` 不一致（例如缺少三件套前置校验、
+    没有 `::notice::Gradle warm-up on <SHA>`），就说明跑的是旧提交。
+    正确做法：push 一个新提交，或在 Actions 页用 **Run workflow**（`workflow_dispatch`）
+    在最新 `main` 上起一条全新运行。预热步骤开头的 notice 会打印 `GITHUB_SHA`，可直接比对。
+  - 本地复现干净 checkout（不依赖 GitHub runner）：
+    ```bash
+    git checkout-index -f --prefix=build/ci-checkout-sim/ -- \
+      android/gradlew android/gradlew.bat \
+      android/gradle/wrapper/gradle-wrapper.jar \
+      android/gradle/wrapper/gradle-wrapper.properties
+    # 从 ci.yml 提取 Warm Gradle wrapper 的 run 块，在 build/ci-checkout-sim/ 下执行
+    # 期望：Gradle wrapper ready (attempt 1) / Gradle 9.3.1
+    ```
 - **Job `build-ios`**（需 quality 通过，macOS runner）：
   1. `subosito/flutter-action` 装 Flutter（开启 pub 缓存）
   2. 确保 CocoaPods 可用（`brew install cocoapods`，GitHub macOS runner 未必预装）

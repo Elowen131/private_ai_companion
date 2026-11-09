@@ -34,6 +34,11 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # 手动触发：workflow 修好后可在最新提交上直接起一条干净运行，无需空提交。
+  # 注意：对旧失败任务点 "Re-run jobs" 会沿用原始 SHA 和原始 workflow 文件，
+  # 即使仓库已经修复，重跑仍会复现旧报错（例如旧的 gradlew 五连重试）。
+  # 遇到「日志里的脚本和仓库里不一致」时，一律用 push 或此处手动触发新运行。
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -174,6 +179,7 @@ jobs:
         # 行尾（CRLF 会让 Linux 报 bad interpreter），再只对瞬时网络错误做退避重试。
         run: |
           set -euo pipefail
+          echo "::notice::Gradle warm-up on ${GITHUB_SHA:-unknown} (${GITHUB_REF:-unknown})"
           cd android
           LOG="${RUNNER_TEMP:-/tmp}/gradlew-warm.log"
           for f in ./gradlew ./gradlew.bat gradle/wrapper/gradle-wrapper.jar; do
