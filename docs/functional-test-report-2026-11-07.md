@@ -166,3 +166,32 @@ adb install -r + 冷启动                  → Success，零 exception / 零 AN
 
 **诚实边界**：本次是 x86_64 debug APK 的模拟器 UI 冒烟，不含端侧真模型推理、
 release 包体 / 帧率 / 内存峰值；这些仍以 CI 与真机专项为准。
+
+---
+
+## 9. 2026-11-09 补录：CI 偶发失败 F4（测试随机性假阳性，非产品缺陷）
+
+CI 报 `chat_functional_test.dart: F4 上下文构建 已删除/已撤回消息不进入模型上下文`
+`Expected: false / Actual: <true>`（510 passed / 1 failed），本地全量却是 511/0。
+
+**根因在测试，不在 `buildContext`**：`MockLlmProvider` 用未播种 `Random()` 从 4 个
+模板里挑一条，其中第 4 条「（眼神闪了闪）你总是这样，一句话就把我的心搅乱了。」
+**不含用户输入**。F4 连续两次 `sendUserMessage` 若都抽到第 4 条，两条 AI 消息
+内容完全相同；旧断言 `contents.any((c) => c == ai.content)` 用内容相等当消息身份，
+于是把**未删除的第一条**误判成「被删的第二条又回来了」。概率 1/4×1/4 = 1/16。
+`ChatOrchestrator.buildContext` 的 `if (h.isDeleted || h.recalled) continue;`
+与 `MessageLifecycleService.deleteAiMessage` 的 `isDeleted: true` 均正确，产品代码未改。
+
+**修复**（`test/chat_functional_test.dart` F4）：
+1. 待删除回复先用 `copyWith(content: 唯一标记)` 改写，消除内容歧义；
+2. 增加**前置条件断言**（未删除时该标记确实在上下文中），再断言删除后消失；
+3. 增加**结构性兜底**：`assistant` 角色消息只剩 1 条且等于第一条回复 —— 不依赖内容唯一性；
+4. 补上测试名里一直没覆盖的「已撤回」分支：撤回一条与本轮输入不同的用户消息，
+   断言其不再进入上下文（避开 `buildContext` 末尾追加的 `lastUserText` 混淆）。
+
+**回归**：`flutter analyze --fatal-infos` 零问题；F4 单测连跑 6 次 6/6；
+全量 `flutter test` **511 passed / 0 failed**。
+
+**同类排查**：`sample_persona_test` / `wechat_sync_e2e_test` / `video_chat_page_test`
+此前已分别用「循环覆盖」「结构与落库断言」「确定性回声 Provider」消除同类随机依赖；
+F3「删除 AI 消息」只有一条 AI 回复，不存在内容碰撞，无需改动。

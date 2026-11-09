@@ -226,7 +226,7 @@ void main() {
 
   group('F4 上下文构建', () {
     test('已删除/已撤回消息不进入模型上下文', () async {
-      await orch.sendUserMessage(
+      final firstAi = await orch.sendUserMessage(
         conversationId: conversationId,
         userId: _userId,
         personaId: personaId,
@@ -238,7 +238,24 @@ void main() {
         personaId: personaId,
         rawInput: '陪我聊聊',
       );
-      await lifecycle.deleteAiMessage(ai.id);
+
+      // 给待删除的回复打唯一标记。MockLlmProvider 的 4 个模板里有一条不含
+      // 用户输入，两次 sendUserMessage 都抽到它时两条 AI 消息内容完全相同；
+      // 旧断言用「内容相等」当消息身份，会把未删除的第一条误判成「被删的
+      // 那条又回来了」（CI 曾以约 1/16 概率偶发失败，并非过滤逻辑失效）。
+      const marker = '待删除的回复·唯一标记#4f2a';
+      final marked = ai.copyWith(content: marker);
+      await msgRepo.update(marked);
+
+      final ctxBefore = await orch.buildContext(
+        conversationId: conversationId,
+        personaId: personaId,
+        lastUserText: '陪我聊聊',
+      );
+      expect(ctxBefore.any((m) => m.content == marker), isTrue,
+          reason: '前置条件：未删除时该消息确实在上下文中');
+
+      await lifecycle.deleteAiMessage(marked.id);
 
       final ctx = await orch.buildContext(
         conversationId: conversationId,
@@ -247,7 +264,35 @@ void main() {
       );
       final contents =
           ctx.where((m) => m.role != 'system').map((m) => m.content).toList();
-      expect(contents.any((c) => c == ai.content), isFalse);
+      expect(contents.any((c) => c == marker), isFalse,
+          reason: '已删除的 AI 消息不得再进入模型上下文');
+
+      // 结构性兜底：不依赖内容唯一性，两条 AI 回复里只剩未删除的第一条。
+      final assistants = ctx.where((m) => m.role == 'assistant').toList();
+      expect(assistants.length, 1);
+      expect(assistants.single.content, firstAi.content);
+
+      // 测试名同时覆盖「已撤回」：撤回一条与本轮输入不同的用户消息，
+      // 避免与 buildContext 末尾追加的 lastUserText 混淆。
+      final toRecall = await orch.recordUserMessage(
+        conversationId: conversationId,
+        userId: _userId,
+        rawInput: '这句要被撤回·8c71',
+      );
+      await lifecycle.recallUserMessage(toRecall.id,
+          recallVisibleToOther: true);
+
+      final ctxAfterRecall = await orch.buildContext(
+        conversationId: conversationId,
+        personaId: personaId,
+        lastUserText: '陪我聊聊',
+      );
+      expect(
+          ctxAfterRecall
+              .where((m) => m.role != 'system')
+              .any((m) => m.content == toRecall.content),
+          isFalse,
+          reason: '已撤回的用户消息不得再进入模型上下文');
     });
   });
 }
