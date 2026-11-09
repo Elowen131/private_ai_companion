@@ -98,6 +98,18 @@ class AvatarMesh {
   /// 近似高光强度，由外部材质的 metallic / roughness 推导（0 = 无高光）。
   final double specularStrength;
 
+  /// 边缘菲涅尔轮廓光强度（0 = 关闭）。
+  ///
+  /// 纯软件/GPU 混合渲染没有实时环境光，单方向光下角色边缘容易「贴」在背景上。
+  /// 加一笔 view-dependent 的冷白轮廓光，让剪影从背景里浮出来，
+  /// 是体积感最划算的一笔。默认 0：保持程序化模型与旧版逐像素一致。
+  final double rimStrength;
+
+  /// 是否在脚下画一团柔和接触阴影，把角色「落」在地面上。
+  /// 默认 false：外部导入（VRM/GLB）沿用各自着色，不强行加阴影；
+  /// App 内生成的模型默认开启，画面更稳。
+  final bool contactShadow;
+
   AvatarMesh({
     required this.bones,
     required this.positions,
@@ -115,6 +127,8 @@ class AvatarMesh {
     this.centerY = 1.58,
     this.toonSteps = 0,
     this.specularStrength = 0.0,
+    this.rimStrength = 0.0,
+    this.contactShadow = false,
   });
 
   int get vertexCount => positions.length ~/ 3;
@@ -619,6 +633,8 @@ class MeshBuilder {
     bool cocoaMotif = false,
     bool warmPalette = false,
     double frameScale = 1.0,
+    double rimStrength = 0.0,
+    bool contactShadow = false,
   }) {
     final mesh = AvatarMesh(
       bones: bones,
@@ -634,6 +650,8 @@ class MeshBuilder {
       cocoaMotif: cocoaMotif,
       warmPalette: warmPalette,
       frameScale: frameScale,
+      rimStrength: rimStrength,
+      contactShadow: contactShadow,
     );
     mesh.computeBindMatrices();
     return mesh;

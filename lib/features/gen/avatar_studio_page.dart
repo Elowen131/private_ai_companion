@@ -15,6 +15,7 @@ import 'package:private_ai_companion/core/avatar3d/avatar_regions.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_tuning.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_view.dart';
 import 'package:private_ai_companion/core/avatar3d/chibi_builder.dart';
+import 'package:private_ai_companion/core/avatar3d/wardrobe_inference.dart';
 import 'package:private_ai_companion/core/desktop/desktop_overlay_service.dart';
 import 'package:private_ai_companion/core/desktop/persona_visual_spec.dart';
 import 'package:private_ai_companion/core/media/persona_media.dart';
@@ -256,6 +257,9 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
     try {
       final pal = await _extractPalette(path);
       if (!mounted) return;
+      // 照片只提供配色：由衣着主色的明度 / 饱和度 / 冷暖做确定性推断，
+      // 得到「建议款式」，不识别照片里实际穿了什么衣服。
+      final suggested = inferWardrobeFromPalette(pal);
       setState(() {
         _photoPath = path;
         _palette = pal;
@@ -265,8 +269,12 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
         _dirty = true;
         _applied = false;
       });
-      await _rebuildAll();
-      _toast('已从照片提取配色（发色 / 衣着 / 点缀 / 肤色）');
+      // 复用现有服饰切换逻辑（三张造型卡同步换款），其内部会整组重建网格；
+      // 因此这里不再单独 await _rebuildAll，避免重复重建。
+      // 用户随后仍可点服饰标签手动改回，手选能力与色块 UI 均不变。
+      _selectWardrobe(suggested);
+      _toast('已从照片提取配色（发色 / 衣着 / 点缀 / 肤色）\n'
+          '已按照片配色推荐服饰：${suggested.label}，可手动改回');
     } catch (e) {
       _toast('照片读取失败：$e');
     }

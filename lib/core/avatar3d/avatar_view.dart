@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -83,6 +84,10 @@ class _Avatar3DViewState extends State<Avatar3DView>
   double _pitch = 0.06;
   DateTime _actionAt = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// 点击命中的部位：短暂高亮该部位的几何面（约 750ms 后自动清除）。
+  AvatarRegion? _highlightRegion;
+  Timer? _highlightTimer;
+
   // 3D 是纯 Dart CPU 软渲染（22 骨骼姿态 + LBS 蒙皮 + 逐三角形光照/排序）。
   // 跟着 vsync 在 60/120Hz 全速跑会白烧 CPU 与电量，30fps 对低多边形待机
   // 动画完全足够。缓存上一帧的 Widget 实例：返回同一个实例时 Flutter 会
@@ -92,6 +97,19 @@ class _Avatar3DViewState extends State<Avatar3DView>
   int _lastFrameAt = 0;
 
   void _invalidateFrame() => _cachedFrame = null;
+
+  /// 点中部位后让该部位的面短暂提亮；重复点击只重置计时，不叠加 Timer。
+  /// 缓存帧必须一起失效，否则 33ms 帧缓存会把旧的（无高亮）画面继续贴上去。
+  void _flashHighlight(AvatarRegion region) {
+    _highlightTimer?.cancel();
+    _invalidateFrame();
+    setState(() => _highlightRegion = region);
+    _highlightTimer = Timer(const Duration(milliseconds: 750), () {
+      if (!mounted) return;
+      _invalidateFrame();
+      setState(() => _highlightRegion = null);
+    });
+  }
 
   @override
   void initState() {
@@ -137,6 +155,7 @@ class _Avatar3DViewState extends State<Avatar3DView>
 
   @override
   void dispose() {
+    _highlightTimer?.cancel();
     _ctrl.dispose();
     super.dispose();
   }
@@ -162,6 +181,7 @@ class _Avatar3DViewState extends State<Avatar3DView>
           : (d) {
               final region = pickAvatarRegion(_buffer, d.localPosition);
               if (region != null && region != AvatarRegion.none) {
+                _flashHighlight(region);
                 widget.onRegionTap!(region);
               }
             },
@@ -170,6 +190,7 @@ class _Avatar3DViewState extends State<Avatar3DView>
           : (d) {
               final region = pickAvatarRegion(_buffer, d.localPosition);
               if (region != null && region != AvatarRegion.none) {
+                _flashHighlight(region);
                 widget.onRegionLongPress!(region);
               }
             },
@@ -241,6 +262,7 @@ class _Avatar3DViewState extends State<Avatar3DView>
           atmosphere: widget.atmosphere,
           phase: (t % 8) / 8,
           gpu: widget.gpu,
+          highlightRegion: _highlightRegion,
         ),
         size: Size.infinite,
       ),

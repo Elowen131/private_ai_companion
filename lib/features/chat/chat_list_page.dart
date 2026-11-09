@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/app/motion.dart';
 import 'package:private_ai_companion/app/router.dart';
+import 'package:private_ai_companion/core/i18n/app_locale.dart';
 
 import 'package:private_ai_companion/core/models/conversation.dart';
 import 'package:private_ai_companion/core/models/persona.dart';
@@ -51,6 +52,9 @@ class _ChatListData {
 class _ChatListPageState extends State<ChatListPage> {
   final _ps = getIt<PersonaService>();
   final _convRepo = getIt<ConversationRepository>();
+
+  /// 便捷取当前界面语言文案（缺失翻译时安全回退到中文原文）。
+  AppLocaleController get _l10n => getIt<AppLocaleController>();
 
   /// FutureBuilder 的 future 必须稳定：缓存到 initState，刷新时才重新赋值。
   late Future<_ChatListData> _dataFuture;
@@ -294,13 +298,16 @@ class _ChatListPageState extends State<ChatListPage> {
           const Divider(),
         ],
         _sectionTitle('群聊'),
+        // 角色不足 2 个时给一张直达「创建角色」的引导卡（补 #104 群聊段空态引导）。
+        if (d.groups.isEmpty && d.personas.length < 2)
+          _createRoleGuide(context),
         if (d.groups.isEmpty)
           _emptyGroupHint(context, d.personas.length)
         else
           ...d.groups.map((g) => ListTile(
                 leading: const CircleAvatar(child: Icon(Icons.group)),
-                title: Text(g.title.isNotEmpty ? g.title : '群聊'),
-                subtitle: Text('${g.participantIds.length} 位角色同场'),
+                title: Text(g.title.isNotEmpty ? g.title : _l10n.tr('group_chat')),
+                subtitle: Text(_l10n.tr('group_members').replaceAll('%d', g.participantIds.length.toString())),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.of(context)
                     .push(MaterialPageRoute(
@@ -547,6 +554,43 @@ class _ChatListPageState extends State<ChatListPage> {
           onPressed: () => AppRouter.openModelCatalog(context)
               .then((_) => _checkModel()),
           child: const Text('去安装'),
+        ),
+      ),
+    );
+  }
+
+  /// 群聊空态且角色不足 2 个时的直达引导：一步跳到「创建角色」，
+  /// 不必先弹新建菜单再选一次（补 #104 / 设计文档 P0 的群聊段引导）。
+  Widget _createRoleGuide(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 8),
+      color: theme.colorScheme.primaryContainer.withValues(alpha: 0.22),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+            color: theme.colorScheme.primary.withValues(alpha: 0.18)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+        child: Row(
+          children: [
+            Icon(Icons.person_add_outlined,
+                size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text('群聊要至少 2 个角色，先创建一个角色吧',
+                  style: TextStyle(fontSize: 12.5)),
+            ),
+            TextButton(
+              onPressed: () async {
+                await AppRouter.openRoleCreate(context);
+                if (mounted) _refresh();
+              },
+              child: const Text('先创建一个角色'),
+            ),
+          ],
         ),
       ),
     );

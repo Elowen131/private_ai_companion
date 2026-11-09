@@ -9,6 +9,10 @@ import 'package:private_ai_companion/core/persona/persona_service.dart';
 import 'package:private_ai_companion/core/world/world_mode.dart';
 import 'package:private_ai_companion/features/settings/widgets/settings_kit.dart';
 import 'package:private_ai_companion/features/widgets/image_picker_field.dart';
+import 'package:private_ai_companion/features/gen/avatar_studio_page.dart';
+
+/// 新建角色保存成功后，引导弹层里用户选择的下一步。
+enum _PostCreateChoice { chat, later, studio }
 
 /// 角色创建 / 编辑页（方案 4.1 + 第 21 章角色创建系统）。保存后为全局通用的人设卡（SSOT）。
 ///
@@ -175,19 +179,32 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
     // 完全看不到刚建的角色（这是首启最容易断掉的一环）。改为给一个明确出口：
     // 主按钮直接进入对话（用 pushReplacement 换掉表单页，返回不会回到空表单）。
     if (widget.initial == null) {
-      final start = await _askStartChat(p);
+      final choice = await _askStartChat(p);
       if (!mounted) return;
-      if (start) {
+      if (choice == _PostCreateChoice.chat) {
         await _startChat(p);
         return;
       }
+      if (choice == _PostCreateChoice.studio) {
+        // 角色已在上面 _ps.save(p) 落库，工坊自行读取人设列表，不会丢角色。
+        // 用 pushReplacement 换掉表单页：返回不落回空表单，也不会被下面的
+        // pop(p) 把刚打开的工坊关掉（与「立刻开始聊天」的出口策略一致）。
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const AvatarStudioPage()),
+        );
+        return;
+      }
+      // later：落到下面的 pop(p) 回列表。
     }
     if (!mounted) return;
     Navigator.of(context).pop(p);
   }
 
-  /// 创建成功后的下一步引导：一个主按钮、一个「稍后」，不写长文案。
-  Future<bool> _askStartChat(Persona p) async {
+  /// 创建成功后的下一步引导：主按钮 + 两个次要出口，不写长文案。
+  /// 返回用户选择，由 _doSave 决定跳转；角色已在此前 _ps.save(p) 落库，
+  /// 因此「去做形象」不会丢角色。
+  Future<_PostCreateChoice> _askStartChat(Persona p) async {
+    var goStudio = false;
     final ok = await showModalBottomSheet<bool>(
       context: context,
       showDragHandle: true,
@@ -237,6 +254,16 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
                   ),
                 ),
                 const SizedBox(height: 4),
+                // #102：创建后主动引导进「形象工坊」（次要动作，不改动上面两个原按钮）。
+                Center(
+                  child: TextButton(
+                    onPressed: () {
+                      goStudio = true;
+                      Navigator.pop(ctx, false);
+                    },
+                    child: const Text('去做形象'),
+                  ),
+                ),
                 Center(
                   child: TextButton(
                     onPressed: () => Navigator.pop(ctx, false),
@@ -249,7 +276,8 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
         );
       },
     );
-    return ok == true;
+    if (goStudio) return _PostCreateChoice.studio;
+    return ok == true ? _PostCreateChoice.chat : _PostCreateChoice.later;
   }
 
   /// 建会话并替换当前表单页，避免「返回」又落回创建页。

@@ -1,6 +1,7 @@
 import 'package:private_ai_companion/core/models/age_history.dart';
 import 'package:private_ai_companion/core/models/bond.dart';
 import 'package:private_ai_companion/core/models/child.dart';
+import 'package:private_ai_companion/core/models/pregnancy.dart';
 import 'package:private_ai_companion/core/models/diary_entry.dart';
 import 'package:private_ai_companion/core/models/family_member.dart';
 import 'package:private_ai_companion/core/models/persona_archive.dart';
@@ -356,6 +357,36 @@ class FamilyMemberRepository {
     final c = await _db.database;
     await c.insert('family_member', m.toMap(),
         conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+}
+
+// ---------------- 孕期（pending 出生）----------------
+class PregnancyRepository {
+  final AppDatabase _db;
+  PregnancyRepository(this._db);
+
+  Future<List<Pregnancy>> listPending() async {
+    final c = await _db.database;
+    final rows = await c.query('pregnancy', orderBy: 'due_at_world_time ASC');
+    return rows.map(Pregnancy.fromMap).toList();
+  }
+
+  Future<List<Pregnancy>> listByMother(String motherRefId) async {
+    final c = await _db.database;
+    final rows = await c
+        .query('pregnancy', where: 'mother_ref_id = ?', whereArgs: [motherRefId]);
+    return rows.map(Pregnancy.fromMap).toList();
+  }
+
+  Future<void> upsert(Pregnancy p) async {
+    final c = await _db.database;
+    await c.insert('pregnancy', p.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> delete(String id) async {
+    final c = await _db.database;
+    await c.delete('pregnancy', where: 'id = ?', whereArgs: [id]);
   }
 }
 

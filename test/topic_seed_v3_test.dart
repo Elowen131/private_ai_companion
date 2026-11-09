@@ -13,7 +13,7 @@ void main() {
     final seeds = buildTopicSeeds();
     expect(seeds.length, greaterThanOrEqualTo(3200));
     expect(seeds.map((e) => e.id).toSet().length, seeds.length);
-    expect(builtinTopicSeedVersion, 3);
+    expect(builtinTopicSeedVersion, 4);
 
     final byCat = <String, int>{};
     for (final s in seeds) {
@@ -52,13 +52,16 @@ void main() {
     expect(food[7].content.length, greaterThan(10));
   });
 
-  test('低可读性正文降权但不删除，高质量内容足以填满推荐池', () {
+  test('v4：143 个题材小类全部为「可直接发送」的高质量开场白', () {
     final seeds = buildTopicSeeds();
     final low = seeds.where((e) => e.weight < 70).length;
     final high = seeds.where((e) => e.weight >= 100).length;
-    expect(low, greaterThan(1000));
+    // v4 把题材小类里 1977 条纯括号/过短行全部升级为完整开场白，
+    // 题材库不应再残留低可读性行；整体低质行应为 0。
+    expect(low, 0, reason: 'v4 后仍残留低可读性行：$low');
+    // 高质量内容要能填满 query 的 LIMIT 400，推荐位才不会被低质行占据。
     expect(high, greaterThan(400),
-        reason: '高质量内容要能填满 query 的 LIMIT 400，推荐位才不会被低质行占据');
+        reason: '高质量内容不足以填满推荐位 LIMIT 400');
 
     // v3 新增的 228 条全部是完整开场白，必须落在高权重档。
     final boostContents = dailyBoostRows.values

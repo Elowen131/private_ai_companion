@@ -5,6 +5,7 @@ import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/app/router.dart';
 import 'package:private_ai_companion/app/theme.dart';
 import 'package:private_ai_companion/core/i18n/app_locale.dart';
+import 'package:private_ai_companion/core/i18n/strings.dart';
 import 'package:private_ai_companion/core/prefs/global_settings.dart';
 
 /// 应用根组件。
@@ -36,8 +37,8 @@ class MyApp extends StatelessWidget {
       animation: settings,
       builder: (_, _) => ValueListenableBuilder<String>(
         valueListenable: localeCtl,
-        builder: (_, value, _) => MaterialApp(
-          title: '私人 AI 陪伴',
+        builder: (_, value, _) =>         MaterialApp(
+          title: trString('app_name', value == 'system' ? 'zh' : value),
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light(),
           darkTheme: AppTheme.dark(),
@@ -46,6 +47,12 @@ class MyApp extends StatelessWidget {
           supportedLocales: const [
             Locale('zh', 'CN'),
             Locale('en', 'US'),
+            Locale('ja', 'JP'),
+            Locale('ko', 'KR'),
+            Locale('fr', 'FR'),
+            Locale('es', 'ES'),
+            Locale('ru', 'RU'),
+            Locale('de', 'DE'),
           ],
           localizationsDelegates: const [
             GlobalMaterialLocalizations.delegate,

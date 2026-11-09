@@ -52,11 +52,14 @@ dependencies:
   image_picker: ^1.2.4
   # 加密快照 / 加密导出：AES-256-GCM 标准纯 Dart 实现（无原生库、不增 APK 原生体积）
   pointycastle: ^3.9.1
+  # 微信桥接独立服务（bin/）在无头/桌面环境以 FFI 直接打开 SQLite，避免依赖移动端原生加密插件
+  sqflite_common_ffi: ^2.3.3
+  # 系统级分享（缺口 #113）走 Android 原生 FileProvider + MethodChannel，
+  # 不引入任何 Dart 第三方包：避免新依赖在受限网络下无法解析，也不增包体。
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  sqflite_common_ffi: ^2.3.3   # 仅测试期使用：Linux CI 上以 FFI 真 SQLite 替代原生加密插件（见 flutter_test_config.dart）
 
 flutter:
   uses-material-design: true

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  系统级分享（缺口 #113）的 FileProvider 路径白名单。
+  只暴露 cacheDir/share/ —— ShareBridge 会先把导出文件复制到这里再生成
+  content:// URI。刻意不声明 <external-path> / <root-path>：绝不把整个私有
+  数据目录或外部存储授权给接收分享的第三方 App。
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="share" path="share/" />
+</paths>

@@ -44,6 +44,8 @@ class MainActivity : FlutterActivity() {
         v.register()
         voice = v
         NotificationBridge(this, flutterEngine.dartExecutor.binaryMessenger)
+        // 系统级分享（缺口 #113）：零 Dart 依赖，走原生 FileProvider。
+        ShareBridge(this, flutterEngine.dartExecutor.binaryMessenger).register()
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LLM_CHANNEL)
             .setMethodCallHandler { call, result ->
@@ -101,6 +103,13 @@ class MainActivity : FlutterActivity() {
                                 CompanionOverlayService.EXTRA_TRANSPARENT,
                                 call.argument<Boolean>("transparent") ?: true
                             )
+                            // 完全点击透传：随 SHOW 一起送过去，服务被系统回收重建后
+                            // 也能按用户设置恢复 FLAG_NOT_TOUCHABLE。
+                            putExtra(
+                                CompanionOverlayService.EXTRA_PASSTHROUGH,
+                                call.argument<Boolean>("passthrough")
+                                    ?: CompanionOverlayService.pendingPassthrough
+                            )
                             // 人设卡推导的视觉规格（JSON 字符串）：悬浮窗是独立 engine，
                             // 只有把规格一起送过去，形象才可能守住「不脱离人设」。
                             putExtra(
@@ -143,6 +152,33 @@ class MainActivity : FlutterActivity() {
                             true
                         } catch (_: Exception) {
                             false
+                        }
+                        result.success(ok)
+                    }
+                    "setPassthrough" -> {
+                        // 完全点击透传开关：只在服务确实在运行时下发 Intent。
+                        // 服务未运行仍 startService 会凭空创建一个前台服务，因此这里
+                        // 只把值缓存进进程级状态，等用户下次 SHOW 时随 Intent 带过去。
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        CompanionOverlayService.pendingPassthrough = enabled
+                        val ok = if (CompanionOverlayService.isRunning) {
+                            val intent =
+                                Intent(this, CompanionOverlayService::class.java).apply {
+                                    action = CompanionOverlayService.ACTION_SET_PASSTHROUGH
+                                    putExtra(
+                                        CompanionOverlayService.EXTRA_PASSTHROUGH,
+                                        enabled
+                                    )
+                                }
+                            try {
+                                startService(intent)
+                                true
+                            } catch (_: Exception) {
+                                false
+                            }
+                        } else {
+                            // 未显示悬浮窗时无需原生侧即时生效，缓存即最终状态。
+                            true
                         }
                         result.success(ok)
                     }

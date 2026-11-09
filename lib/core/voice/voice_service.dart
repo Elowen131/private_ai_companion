@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:private_ai_companion/core/voice/clone/voice_clone_service.dart';
 import 'package:private_ai_companion/core/voice/voice_bridge.dart';
 import 'package:private_ai_companion/core/voice/voice_models.dart';
+import 'package:private_ai_companion/core/voice/video_audio_extractor.dart';
 import 'package:private_ai_companion/data/database/migrations.dart' show nowMs;
 import 'package:private_ai_companion/data/repositories/voice_profile_repository.dart';
 
@@ -25,11 +26,17 @@ class VoiceService extends ChangeNotifier {
   /// 也就是说没配克隆的人，行为与上一版逐字一致。
   final VoiceCloneService? clone;
 
+  /// 视频抽音轨（可选）。非 null 时，[analyzeInto] 会把视频样本先交给它抽成
+  /// WAV 再分析声纹；为 null 时视频样本会直接报「需要先配置自建克隆服务」。
+  /// 端上不做原生视频解码（见 [MediaType] 与 [CloneBackedVideoExtractor] 的说明）。
+  final VideoAudioExtractor? videoExtractor;
+
   VoiceService({
     required this.platform,
     required this.repo,
     required this.baseDir,
     this.clone,
+    this.videoExtractor,
   });
 
   VoiceCapabilities _caps = VoiceCapabilities.none;
@@ -119,7 +126,30 @@ class VoiceService extends ChangeNotifier {
   }) async {
     final dir = '$voiceDir/$personaId';
     await ensureDir(dir);
-    final a = await platform.analyzeVoice(picked.path, outDir: dir);
+
+    // 视频样本：端上不做原生解码（避免膨胀离线 APK），统一交给视频抽音轨
+    // 实现——默认是复用「自建克隆服务」地址的 [CloneBackedVideoExtractor]，
+    // 把画面音轨抽成 16k 单声道 WAV 后，再对这条 WAV 做声纹分析。
+    // 没配抽音轨能力时明确报错，而不是假装视频能被直接分析。
+    final isVideo =
+        MediaType.isVideoPath(picked.path) || picked.mime.startsWith('video');
+    String analyzePath = picked.path;
+    String? extractedWav;
+    if (isVideo) {
+      final ex = videoExtractor;
+      if (ex == null) {
+        throw VoiceException(
+          'NO_VIDEO_EXTRACT',
+          '视频样本需要先抽音轨：请在「设置 → 声音克隆」里配置自建克隆服务地址'
+          '（见 tools/voice_clone_server.py）。端上不解码视频。',
+        );
+      }
+      final a = await ex.extract(picked.path, dir);
+      analyzePath = a.path;
+      extractedWav = a.path;
+    }
+
+    final a = await platform.analyzeVoice(analyzePath, outDir: dir);
     if (a.durationMs < 600 || a.f0Mean <= 0) {
       throw VoiceException('TOO_SHORT',
           '这段音频里没听清稳定的声音（建议 2 秒以上、有人说话、少点背景音）');
@@ -131,7 +161,9 @@ class VoiceService extends ChangeNotifier {
       sourceKind: sourceKind ?? (picked.mime.startsWith('video') ? 'video' : 'sample'),
       sourceName: picked.name,
       sourcePath: picked.path,
-      playablePath: a.playablePath,
+      playablePath: a.playablePath.isNotEmpty
+          ? a.playablePath
+          : (extractedWav ?? picked.path),
       durationMs: a.durationMs,
       f0Mean: a.f0Mean,
       f0Std: a.f0Std,

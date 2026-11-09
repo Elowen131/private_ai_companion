@@ -5,6 +5,7 @@ import 'package:private_ai_companion/core/desktop/desktop_overlay_service.dart';
 import 'package:private_ai_companion/core/desktop/overlay_prefs.dart';
 import 'package:private_ai_companion/core/desktop/persona_visual_spec.dart';
 import 'package:private_ai_companion/core/persona/persona_service.dart';
+import 'package:private_ai_companion/core/prefs/app_prefs.dart';
 
 /// 桌面伴生悬浮窗真实开关（设置页与桌面伴生页共用同一组件 / 同一状态源）。
 ///
@@ -23,17 +24,30 @@ class OverlayToggleTileState extends State<OverlayToggleTile> {
   final _prefs = getIt<OverlayPrefs>();
   bool _supported = false;
   bool _transparent = true;
+  bool _passthrough = false;
 
   @override
   void initState() {
     super.initState();
     _transparent = _prefs.transparent;
+    _passthrough = _overlay.passthrough;
+    // 透传开关持久化：复用通用偏好 AppPrefs 的 raw / setRaw，
+    // 由服务统一持有内存态，避免两个页面各自记一份互相矛盾。
+    _overlay.attachPassthroughPrefs(
+      read: (k) => getIt<AppPrefs>().raw(k),
+      write: (k, v) => getIt<AppPrefs>().setRaw(k, v),
+    );
     _init();
   }
 
   Future<void> _init() async {
     _supported = await _overlay.isSupported();
     if (mounted) setState(() {});
+    // 透传偏好异步恢复放后台，不阻塞首帧的 _supported 显示；
+    // 单元测试的 FakeAsync 下文件 IO 可能不完成，此时保持默认 false，不影响构建。
+    _overlay.loadPassthrough().then((_) {
+      if (mounted) setState(() => _passthrough = _overlay.passthrough);
+    });
   }
 
   /// 启动悬浮窗时把「当前角色的人设卡」一起送过去。
@@ -89,6 +103,12 @@ class OverlayToggleTileState extends State<OverlayToggleTile> {
     }
   }
 
+  /// 完全点击透传开关：开启后悬浮角色不响应点击，触摸全部交给下层应用。
+  Future<void> _togglePassthrough(bool v) async {
+    await _overlay.setPassthrough(v);
+    if (mounted) setState(() => _passthrough = v);
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
@@ -108,6 +128,12 @@ class OverlayToggleTileState extends State<OverlayToggleTile> {
             subtitle: const Text('关闭则回退不透明卡片（规避部分机型黑底）'),
             value: _transparent,
             onChanged: (v) => _toggleTransparent(v),
+          ),
+          SwitchListTile(
+            title: const Text('完全点击透传（不遮挡操作）'),
+            subtitle: const Text('开启后悬浮角色不响应点击，触摸全部交给下层应用'),
+            value: _passthrough,
+            onChanged: (v) => _togglePassthrough(v),
           ),
         ],
       ),

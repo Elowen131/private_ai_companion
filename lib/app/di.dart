@@ -26,6 +26,7 @@ import 'package:private_ai_companion/core/security/profile_lock_service.dart';
 import 'package:private_ai_companion/core/security/db_cipher_key.dart';
 import 'package:private_ai_companion/core/security/snapshot_key_store.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
 import 'package:private_ai_companion/core/diary/diary_service.dart';
 import 'package:private_ai_companion/core/plot/plot_edit_service.dart';
 import 'package:private_ai_companion/core/bond/bond_service.dart';
@@ -41,7 +42,6 @@ import 'package:private_ai_companion/core/desktop/overlay_prefs.dart';
 import 'package:private_ai_companion/core/safety/content_safety_gate.dart';
 import 'package:private_ai_companion/core/embedding/embedding_service.dart';
 import 'package:private_ai_companion/core/tts/tts_service.dart';
-import 'package:private_ai_companion/core/stt/stt_service.dart';
 import 'package:private_ai_companion/core/memory/vector_store.dart';
 import 'package:private_ai_companion/core/memory/memory_engine.dart';
 import 'package:private_ai_companion/core/persona/persona_service.dart';
@@ -54,13 +54,25 @@ import 'package:private_ai_companion/core/gen/local_media_gen_service.dart';
 import 'package:private_ai_companion/core/prefs/app_prefs.dart';
 import 'package:private_ai_companion/core/security/prefs_cipher.dart';
 import 'package:private_ai_companion/core/prefs/global_settings.dart';
+import 'package:private_ai_companion/core/notify/notification_history.dart';
 import 'package:private_ai_companion/core/notify/notification_service.dart';
 import 'package:private_ai_companion/core/security/app_lock_service.dart';
 import 'package:private_ai_companion/core/voice/clone/voice_clone_client.dart';
 import 'package:private_ai_companion/core/voice/clone/voice_clone_service.dart';
+import 'package:private_ai_companion/core/voice/clone_backed_video_extractor.dart';
+import 'package:private_ai_companion/core/voice/native_video_extractor.dart';
 import 'package:private_ai_companion/core/voice/voice_bridge.dart';
 import 'package:private_ai_companion/core/voice/voice_service.dart';
 import 'package:private_ai_companion/data/repositories/voice_profile_repository.dart';
+import 'package:private_ai_companion/data/repositories/gift_repository.dart';
+import 'package:private_ai_companion/core/life/pet_service.dart';
+import 'package:private_ai_companion/core/life/child_service.dart';
+import 'package:private_ai_companion/core/life/family_service.dart';
+import 'package:private_ai_companion/core/gift/gift_service.dart';
+import 'package:private_ai_companion/core/share/wechat_share_service.dart';
+import 'package:private_ai_companion/core/wechat_bridge/wechat_bridge_config_store.dart';
+import 'package:private_ai_companion/core/wechat_bridge/app_persona_chat_port.dart';
+import 'package:private_ai_companion/core/wechat_bridge/wechat_bridge_service.dart';
 import 'package:private_ai_companion/core/i18n/app_locale.dart';
 import 'package:private_ai_companion/core/moments/moment_prefs.dart';
 import 'package:private_ai_companion/core/moments/moment_auto_post_service.dart';
@@ -74,6 +86,9 @@ import 'package:path_provider/path_provider.dart';
 /// 默认全部使用「本地桩 / Mock」，无需任何模型即可跑通 UI 与交互。
 /// 接入端侧推理时，仅替换 LlmProvider / EmbeddingService / TtsService 的真实实现即可。
 final GetIt getIt = GetIt.instance;
+
+/// 全局 UUID 生成器（多处仓储 / 服务共用）。
+const Uuid uuid = Uuid();
 
 Future<void> setupDependencies() async {
   // ---------- 数据层 ----------
@@ -103,6 +118,11 @@ Future<void> setupDependencies() async {
   getIt.registerSingleton<TopicRepository>(TopicRepository(db));
   getIt.registerSingleton<VoiceProfileRepository>(VoiceProfileRepository(db));
 
+  // ---------- 虚拟送礼 / 微信合规分享 ----------
+  getIt.registerSingleton<GiftRepository>(GiftRepository(db));
+  getIt.registerSingleton<GiftService>(GiftService(getIt()));
+  getIt.registerSingleton<WechatShareService>(WechatShareService());
+
   // ---------- 第 21 章：世界模拟 / 人设扩展 仓储 ----------
   getIt.registerSingleton<PersonaArchiveRepository>(PersonaArchiveRepository(db));
   getIt.registerSingleton<ProfileLockRepository>(ProfileLockRepository(db));
@@ -114,6 +134,26 @@ Future<void> setupDependencies() async {
   getIt.registerSingleton<ChildRepository>(ChildRepository(db));
   getIt.registerSingleton<FamilyMemberRepository>(FamilyMemberRepository(db));
   getIt.registerSingleton<AgeHistoryRepository>(AgeHistoryRepository(db));
+  getIt.registerSingleton<PregnancyRepository>(PregnancyRepository(db));
+
+  // ---------- 第 21 章延伸：宠物 / 孩子 / 家族 gameplay ----------
+  // FamilyService 必须先于 PetService 注册：PetService.breed 需要把子代与双亲
+  // 登记进家族树，构造时即依赖 FamilyService 实例。
+  getIt.registerSingleton<FamilyService>(
+    FamilyService(getIt<FamilyMemberRepository>(), uuid),
+  );
+  getIt.registerSingleton<PetService>(
+    PetService(getIt<PetRepository>(), getIt<FamilyService>(), uuid),
+  );
+  getIt.registerSingleton<ChildService>(
+    ChildService(
+      getIt<ChildRepository>(),
+      getIt<PregnancyRepository>(),
+      getIt<FamilyService>(),
+      getIt<WorldClock>(),
+      uuid,
+    ),
+  );
 
   // ---------- 内容库 / 备份（第 20 章）----------
   getIt.registerSingleton<TopicService>(TopicService(getIt(), db));
@@ -146,7 +186,6 @@ Future<void> setupDependencies() async {
   getIt.registerSingleton<FallbackLlmProvider>(fallbackLlm);
   getIt.registerSingleton<EmbeddingService>(MockEmbeddingService());
   getIt.registerSingleton<TtsService>(MockTtsService());
-  getIt.registerSingleton<SttService>(MockSttService());
   // 提示词润色走真实本地 LLM；图片/视频/建模仍是待接入的端侧管线（UI 会标注）。
   getIt.registerSingleton<MediaGenService>(
     LocalMediaGenService(llm: getIt<LlmProvider>()),
@@ -177,7 +216,6 @@ Future<void> setupDependencies() async {
   getIt.registerSingleton<StateEngine>(StateEngine(getIt()));
 
   // ---------- 第 21 章：双世界观 / 三模式 / 时序 / 档案锁 / 日记 / 剧情 / 羁绊 / 事件 ----------
-  const uuid = Uuid();
   getIt.registerSingleton<WorldRulesService>(WorldRulesService(getIt()));
   getIt.registerSingleton<WorldClock>(WorldClock(getIt()));
   getIt.registerSingleton<WorldEventService>(WorldEventService(getIt<WorldEventRepository>(), uuid));
@@ -224,6 +262,23 @@ Future<void> setupDependencies() async {
           alias: 'app.prefs.key.v1'));
   getIt.registerSingleton<AppPrefs>(AppPrefs(appDir.path, cipher: prefsCipher));
 
+  // ---------- 微信合规桥接（官方接口：公众号 / 企业微信）----------
+  // 仅在用户主动开启并自部署桥接服务时使用；凭据加密存于 App 偏好。
+  // 端口把微信消息路由到 ChatOrchestrator，并写回角色会话实现「微信↔App 同步」。
+  getIt.registerSingleton<WeChatBridgeConfigStore>(
+    WeChatBridgeConfigStore(getIt<AppPrefs>()),
+  );
+  getIt.registerSingleton<AppPersonaChatPort>(
+    AppPersonaChatPort(
+      getIt<ChatOrchestrator>(),
+      getIt<ConversationRepository>(),
+      getIt<PersonaRepository>(),
+    ),
+  );
+  getIt.registerSingleton<WeChatBridgeService>(
+    WeChatBridgeService(getIt<AppPersonaChatPort>()),
+  );
+
   // ---------- 全局偏好（主题 / 语气强度 / 朗读 / 通知）----------
   final globalSettings = GlobalSettings(getIt<AppPrefs>());
   await globalSettings.load();
@@ -232,9 +287,19 @@ Future<void> setupDependencies() async {
   // ---------- 语音：能力探测 + 声纹档案 + 朗读 / 录音 / 识别 ----------
   // 通道只有 Android 原生侧实现；其它平台显式注入 Noop，
   // 让所有语音入口统一降级成「当前设备不支持」，而不是抛 MissingPluginException。
-  final voicePlatform = (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
-      ? MethodChannelVoicePlatform()
-      : const NoopVoicePlatform();
+  // 显式标注类型：三元表达式的两个分支是不同类，Dart 会把 LUB 推断成 Object，
+  // 导致后续 VoiceService / AppLockService / NativeVideoExtractor 全部类型不匹配。
+  final VoicePlatform voicePlatform;
+  final NativeAudioExtractPlatform nativeAudioExtract;
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    final androidVoice = MethodChannelVoicePlatform();
+    voicePlatform = androidVoice;
+    nativeAudioExtract = androidVoice;
+  } else {
+    const noopVoice = NoopVoicePlatform();
+    voicePlatform = noopVoice;
+    nativeAudioExtract = noopVoice;
+  }
   getIt.registerSingleton<VoicePlatform>(voicePlatform);
 
   // 声音克隆：配置存本机偏好，密钥只在本进程内使用（不写日志、不进备份）。
@@ -253,12 +318,31 @@ Future<void> setupDependencies() async {
       repo: getIt<VoiceProfileRepository>(),
       baseDir: appDir.path,
       clone: cloneService,
+      // 视频抽音轨优先走 Android 端本地解码（MediaExtractor/MediaCodec），
+      // 原生不支持或失败时自动回退到复用「自建克隆服务」地址的实现，
+      // 保留自建服务作为可选 / 兜底路径（见 tools/voice_clone_server.py 的 /extract_audio）。
+      videoExtractor: NativeVideoExtractor(
+        platform: nativeAudioExtract,
+        fallback: CloneBackedVideoExtractor(
+          cloneService: cloneService,
+          httpClient: http.Client(),
+        ),
+      ),
     ),
   );
 
   // ---------- 通知 / 应用锁 ----------
+  // 通知历史与设置页「通知记录」共用同一份持久化 store（AppPrefs 的
+  // notification_history_v1 键），不新增数据库表，避免快照白名单漂移。
+  final notificationHistory = NotificationHistory(
+    KeyValueNotificationHistoryStore(
+      reader: getIt<AppPrefs>().raw,
+      writer: getIt<AppPrefs>().setRaw,
+    ),
+  );
+  getIt.registerSingleton<NotificationHistory>(notificationHistory);
   getIt.registerSingleton<NotificationService>(
-    NotificationService(globalSettings),
+    NotificationService(globalSettings, history: notificationHistory),
   );
   final appLock = AppLockService(getIt<AppPrefs>(), voicePlatform);
   await appLock.load();

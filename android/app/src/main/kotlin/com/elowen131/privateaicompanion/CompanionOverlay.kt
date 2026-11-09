@@ -50,6 +50,7 @@ class CompanionOverlay(private val context: Context) {
     private var pendingSpec: String? = null // 人设卡推导的视觉规格 JSON
     private var pendingModelPath: String? = null // App 内生成的 .glb 路径
     private var transparent = true // 透明背景；个别机型/ROM 透明 surface 会黑底，需回退不透明
+    private var passthrough = false // 完全点击透传；开启后窗口自身也不再收到任何触摸
 
     private var initialX = 0
     private var initialY = 0
@@ -123,8 +124,11 @@ class CompanionOverlay(private val context: Context) {
             // NOT_FOCUSABLE：不抢输入焦点，用户打字/返回键/键盘照常作用在下层应用。
             // NOT_TOUCH_MODAL：窗口矩形之外的触摸全部透传给下层应用；
             // 配合 96dp 的小角标窗口，屏幕 95% 以上区域完全不受影响。
+            // 完全点击透传（passthrough）：额外叠加 FLAG_NOT_TOUCHABLE，连窗口内的触摸
+            // 也交给下层应用；窗口因切换透明背景重建时按 passthrough 字段恢复，避免失效。
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                (if (passthrough) WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else 0),
             // 透明异常回退：transparent=false 时用 OPAQUE，避免在部分机型上出现黑底。
             if (transparent) PixelFormat.TRANSLUCENT else PixelFormat.OPAQUE
         ).apply {
@@ -161,6 +165,34 @@ class CompanionOverlay(private val context: Context) {
             }
         }
         if (ready) pushPending()
+    }
+
+    /**
+     * 完全点击透传开关：在现有 flags 上动态加/去 FLAG_NOT_TOUCHABLE。
+     *
+     * 开启后 WindowManager 会把窗口矩形内的所有触摸也一并交给下层应用，悬浮窗自身
+     * （FlutterView 的戳戳/拎起来手势、以及 [onTouch] 原生拖拽兜底）将**收不到任何触摸**，
+     * 这正是「完全不遮挡操作」的语义与代价。关闭开关时把该 flag 清掉即可恢复角色交互。
+     * 状态记在 [passthrough] 字段里，窗口因切换透明背景等原因重建（[show]）时也会带上，
+     * 不会重启后悄悄失效。复用既有 [params] / [root] / [wm]，不新建窗口。
+     */
+    fun setPassthrough(enabled: Boolean) {
+        if (passthrough == enabled) return
+        passthrough = enabled
+        params?.let { p ->
+            p.flags = if (enabled) {
+                p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            } else {
+                p.flags and (WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv())
+            }
+            root?.let { v ->
+                try {
+                    wm.updateViewLayout(v, p)
+                } catch (_: Exception) {
+                    // 视图已移除
+                }
+            }
+        }
     }
 
     /** 更新心情/动作/名字；原生侧先缓存，Dart 就绪后推送。 */

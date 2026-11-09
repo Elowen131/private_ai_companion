@@ -304,7 +304,9 @@ class _PersonaVoicePageState extends State<PersonaVoicePage> {
               ChRow(
                 leading: const ChIconBadge(icon: Icons.video_file_outlined),
                 title: '上传视频',
-                subtitle: '从画面里抽出人声来分析（mp4 / mov / mkv…）',
+                subtitle: _clone.ready && _clone.providerSelfHosted
+                    ? '自动抽掉画面只留人声来分析（mp4 / mov / mkv…）'
+                    : '需先在「声音克隆」里配置自建服务，视频抽音轨在端外完成',
                 trailing: _busy
                     ? const _MiniSpinner()
                     : const Icon(Icons.add, size: 18),

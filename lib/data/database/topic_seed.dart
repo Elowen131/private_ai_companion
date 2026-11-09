@@ -32,7 +32,14 @@ final RegExp _stageDirectionOnly = RegExp(r'^[（(][^）)]*[）)]$');
 ///    让轮转推荐优先露出「点开即可直接发送」的完整开场白。
 /// 升版时由 `ensureBuiltinContent` 按 id 修订旧行内容并补齐新增行，
 /// 不触碰 `enabled` / `created_at` / `source`，用户停用与收藏状态不丢失。
-const int builtinTopicSeedVersion = 3;
+///
+/// v4：题材库内容质量补齐——v2/v3 阶段大量行是「纯括号动作描写」或
+/// 正文过短（低于 10 字），被 `_parseRows` 判为低可读性、降权不参与推荐，
+/// 导致「每小类 ≥20 条可直接发送」的承诺实际上没达标（125 个小类达标数 <20）。
+/// v4 对这 1977 行在**原行尾部追加一句贴合情绪基调的接续**，把它们升级为
+/// 可直接发送的完整开场白（行位置 / id 不变，老设备走 UPDATE 修订旧内容），
+/// 使全部 143 个小类都拥有 ≥20 条可直接发送的话题。
+const int builtinTopicSeedVersion = 4;
 
 class TopicCategorySeed {
   final String id;

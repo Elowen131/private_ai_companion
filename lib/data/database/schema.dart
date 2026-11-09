@@ -13,7 +13,7 @@
 library;
 
 /// 当前 schema 版本。升版必须同时补 `migrations.dart` 的逐版本迁移分支。
-const int dbVersion = 5;
+const int dbVersion = 6;
 
 /// 历史基线版本，仅供集成测试构造「老设备数据库」使用。
 const int dbVersionV1 = 1;
@@ -555,6 +555,7 @@ const List<String> snapshotTables = [
   'profile_lock',
   'age_history',
   'persona_voice',
+  'pregnancy',
 ];
 
 /// v4 增量 DDL：隐私空间 + 角色声纹档案。
@@ -582,6 +583,28 @@ const List<String> schemaV4Statements = [
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )''',
+];
+
+/// v6：孕期 pending 出生记录（孩子共育成长系统 · 孕期剧情）。
+///
+/// 受孕时不直接写 `child`（否则会污染「已出生孩子」列表与族谱），而是先落一条
+/// pending 记录；到达预产期后由 [ChildService.advancePregnancies] 转正为 `child`
+/// （婴儿）并登记到族谱。沿用第 21 章新表规范：真实外键 + `IF NOT EXISTS` 幂等。
+const List<String> schemaV6Statements = [
+  '''CREATE TABLE IF NOT EXISTS pregnancy(
+    id TEXT PRIMARY KEY,
+    parent_ids TEXT NOT NULL DEFAULT '[]',
+    mother_type TEXT NOT NULL DEFAULT 'char',
+    mother_ref_id TEXT NOT NULL DEFAULT '',
+    worldview TEXT NOT NULL DEFAULT 'realistic',
+    conceived_at_world_time INTEGER NOT NULL,
+    due_at_world_time INTEGER NOT NULL,
+    gender TEXT NOT NULL DEFAULT 'unknown',
+    planned_traits TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+  )''',
+  'CREATE INDEX IF NOT EXISTS idx_pregnancy_due ON pregnancy(due_at_world_time ASC)',
+  'CREATE INDEX IF NOT EXISTS idx_pregnancy_mother ON pregnancy(mother_ref_id)',
 ];
 
 /// v5：声音克隆与系统发音人选择。只加列，不建表、不搬数据。

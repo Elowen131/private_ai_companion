@@ -53,6 +53,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- 系统级分享（缺口 #113）：仅把 cacheDir/share/ 下的导出副本以
+             content:// URI 临时授权给接收方，绝不暴露整个私有数据目录。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- 桌面/伴生悬浮窗前台服务：退后台常驻（Android 14 需声明 specialUse 类型）。 -->
         <service
             android:name=".CompanionOverlayService"

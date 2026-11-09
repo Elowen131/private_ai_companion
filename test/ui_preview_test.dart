@@ -108,7 +108,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 250));
     });
     await tester.pumpAndSettle();
-    await tester.tap(find.text('语言 / Language'));
+    await tester.tap(find.text('语言'));
     await tester.pumpAndSettle();
     await _captureScreen(tester, '07_language');
     // 关掉语言弹窗，展开「更多设置」，看折叠区的分组节奏。

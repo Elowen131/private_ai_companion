@@ -141,6 +141,10 @@ class VoiceBridge(
                 call.argument<String>("outDir") ?: activity.cacheDir.absolutePath,
                 result
             )
+            "extractAudio" -> extractAudio(
+                call.argument<String>("path") ?: "",
+                result
+            )
             "pickMedia" -> pickMedia(call.argument<String>("kind") ?: "audio", result)
             "sttStart" -> sttStart(call.argument<String>("locale") ?: "zh-CN", result)
             "sttStop" -> {
@@ -791,6 +795,180 @@ class VoiceBridge(
         FileOutputStream(file).use { out ->
             out.write(header.array())
             out.write(bytes)
+        }
+    }
+
+    // ---------------- 视频抽音轨（端上原生解码，补齐 #110） ----------------
+
+    /**
+     * 从含音轨的视频里抽出音频，解码为 16k 单声道 PCM 并写成 WAV，返回路径。
+     *
+     * 以前视频样本必须先配「自建克隆服务」才能抽音轨；这里用系统自带的
+     * MediaExtractor + MediaCodec 在**设备端本地**完成，完全离线，不再强依赖
+     * 自建服务（自建服务由 Dart 侧 NativeVideoExtractor 保留为回退 / 可选路径）。
+     *
+     * 与 analyzeVoice 的区别：那段只取前 25 秒算声纹特征且会吞掉解码异常；
+     * 这里要抽出**完整**音轨落盘，所以解码循环单独写、异常一律上抛，并在
+     * finally 里严格释放 MediaExtractor / MediaCodec。WAV 头复用 writeWav、
+     * 重采样复用 resample，与录音 / 声纹落盘格式完全一致（16k / 单声道 / 16-bit）。
+     */
+    private fun extractAudio(path: String, result: MethodChannel.Result) {
+        if (path.isEmpty() || !File(path).exists()) {
+            result.error("NOT_FOUND", "文件不存在", null)
+            return
+        }
+        // 解码是耗时操作：丢到后台线程，结果回到主线程再交给 result。
+        Thread {
+            try {
+                val wav = decodeAudioTrackToWav(path)
+                if (wav == null) {
+                    main.post {
+                        result.error(
+                            "NO_AUDIO",
+                            "这个视频里没有可解析的音轨，换一段带声音的视频试试",
+                            null
+                        )
+                    }
+                } else {
+                    main.post { result.success(wav) }
+                }
+            } catch (e: Exception) {
+                // 不吞异常：把解码失败的具体原因用稳定错误码回给上层。
+                main.post {
+                    result.error("EXTRACT_FAILED", e.message ?: "视频抽音轨失败", null)
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * 返回写好的 WAV 绝对路径；容器里没有 audio 轨或没有有效采样时返回 null。
+     * 任何解码异常都向上抛出，由 [extractAudio] 转成 EXTRACT_FAILED，绝不静默吞掉。
+     */
+    private fun decodeAudioTrackToWav(path: String): String? {
+        val extractor = MediaExtractor()
+        var codec: MediaCodec? = null
+        try {
+            extractor.setDataSource(path)
+            var track = -1
+            var format: MediaFormat? = null
+            for (i in 0 until extractor.trackCount) {
+                val f = extractor.getTrackFormat(i)
+                val mime = f.getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("audio/")) {
+                    track = i
+                    format = f
+                    break
+                }
+            }
+            if (track < 0 || format == null) return null // 没有音轨
+            extractor.selectTrack(track)
+
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
+            codec = MediaCodec.createDecoderByType(mime)
+            val decoder = codec!! // 局部非空别名，避免在可空类型上反复 ?.
+            decoder.configure(format, null, null, 0)
+            decoder.start()
+
+            var srcRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE))
+                format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            var channels = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT))
+                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 1
+
+            val chunks = ArrayList<ShortArray>()
+            var total = 0L
+            val info = MediaCodec.BufferInfo()
+            var inputEos = false
+            var outputEos = false
+            var guard = 0
+            while (!outputEos && guard < 1000000) {
+                guard++
+                if (!inputEos) {
+                    val inIndex = decoder.dequeueInputBuffer(5000)
+                    if (inIndex >= 0) {
+                        val inBuf = decoder.getInputBuffer(inIndex)
+                        val size = if (inBuf == null) -1
+                        else extractor.readSampleData(inBuf, 0)
+                        if (size < 0) {
+                            decoder.queueInputBuffer(
+                                inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            )
+                            inputEos = true
+                        } else {
+                            decoder.queueInputBuffer(
+                                inIndex, 0, size, extractor.sampleTime, 0
+                            )
+                            extractor.advance()
+                        }
+                    }
+                }
+                var outIndex = decoder.dequeueOutputBuffer(info, 5000)
+                while (true) {
+                    if (outIndex >= 0) {
+                        if (info.size > 0) {
+                            val outBuf = decoder.getOutputBuffer(outIndex)
+                            if (outBuf != null) {
+                                outBuf.position(info.offset)
+                                outBuf.limit(info.offset + info.size)
+                                val shorts = ShortArray(info.size / 2)
+                                outBuf.order(ByteOrder.nativeOrder()).asShortBuffer().get(shorts)
+                                chunks.add(shorts)
+                                total += shorts.size
+                            }
+                        }
+                        val eos = (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                        decoder.releaseOutputBuffer(outIndex, false)
+                        if (eos) outputEos = true
+                        outIndex = decoder.dequeueOutputBuffer(info, 0)
+                    } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        // 解码输出格式在启动后才真正确定，采样率 / 声道以此为准。
+                        val of = decoder.outputFormat
+                        if (of.containsKey(MediaFormat.KEY_SAMPLE_RATE))
+                            srcRate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        if (of.containsKey(MediaFormat.KEY_CHANNEL_COUNT))
+                            channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        outIndex = decoder.dequeueOutputBuffer(info, 0)
+                    } else {
+                        break
+                    }
+                }
+            }
+
+            if (total == 0L) return null
+            val all = ShortArray(total.toInt())
+            var off = 0
+            for (chunk in chunks) {
+                System.arraycopy(chunk, 0, all, off, chunk.size)
+                off += chunk.size
+            }
+            val ch = channels.coerceAtLeast(1)
+            val frames = all.size / ch
+            val mono = FloatArray(frames) { i ->
+                var acc = 0f
+                for (chIdx in 0 until ch) acc += all[i * ch + chIdx] / 32768f
+                acc / ch
+            }
+            val pcm = resample(mono, srcRate, TARGET_RATE)
+            if (pcm.isEmpty()) return null
+
+            val dir = File(activity.cacheDir, "vextract").apply { mkdirs() }
+            val out = File(dir, "vextract_${System.currentTimeMillis()}.wav")
+            writeWav(out, pcm, TARGET_RATE)
+            return out.absolutePath
+        } finally {
+            // 无论成功 / 失败 / 异常，都必须释放这两个原生资源。
+            try {
+                codec?.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                codec?.release()
+            } catch (_: Exception) {
+            }
+            try {
+                extractor.release()
+            } catch (_: Exception) {
+            }
         }
     }
 

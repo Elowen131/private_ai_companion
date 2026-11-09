@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'package:private_ai_companion/core/notify/notification_history.dart';
 import 'package:private_ai_companion/core/prefs/global_settings.dart';
 
 /// 系统通知（角色问候 / 世界动态 / 每日提醒）。
@@ -11,7 +12,12 @@ class NotificationService {
   static const _ch = MethodChannel('private_ai_companion/notify');
 
   final GlobalSettings settings;
-  NotificationService(this.settings);
+
+  /// 可选的通知历史记录器。为 null 时 [push] 只发通知、不落记录，
+  /// 行为与加入本字段前完全一致（现有调用方与回归测试不受影响）。
+  final NotificationHistory? history;
+
+  NotificationService(this.settings, {this.history});
 
   bool get supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -101,6 +107,17 @@ class NotificationService {
       return false;
     }
     if (settings.inQuietHours(DateTime.now())) return false;
-    return show(title: title, body: body, id: id);
+    final ok = await show(title: title, body: body, id: id);
+    if (ok && history != null) {
+      // 只在「真的发出去」之后记一条；记录失败绝不影响通知结果。
+      try {
+        await history!.add(
+          title: title,
+          body: body,
+          type: kindGreeting ? 'greeting' : 'moments',
+        );
+      } catch (_) {}
+    }
+    return ok;
   }
 }

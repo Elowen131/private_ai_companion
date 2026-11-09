@@ -53,8 +53,20 @@ abstract class TtsVoicePlatform {
   Future<bool> setTtsVoice(String name);
 }
 
+/// 可选能力：端上原生视频抽音轨（Android MediaExtractor / MediaCodec）。
+///
+/// 与 [TtsVoicePlatform] 同样的理由单独成接口、不塞进 [VoicePlatform]：
+/// 桌面 / 测试环境的 VoicePlatform 实现拿不到这份能力，却不应被迫实现全部入口。
+/// 上层用 `is` 探测，不支持时回退到自建服务；这样也不会破坏任何现有
+/// `implements VoicePlatform` 的测试桩（implements 不会继承接口的默认实现）。
+abstract class NativeAudioExtractPlatform {
+  /// 抽取 [videoPath] 的音轨，返回端上 16k 单声道 WAV 的绝对路径。
+  Future<String> extractAudio(String videoPath);
+}
+
 /// 真实实现：`private_ai_companion/voice` 通道（见 android .../VoiceBridge.kt）。
-class MethodChannelVoicePlatform implements VoicePlatform, TtsVoicePlatform {
+class MethodChannelVoicePlatform
+    implements VoicePlatform, TtsVoicePlatform, NativeAudioExtractPlatform {
   static const _channel = MethodChannel('private_ai_companion/voice');
   static const _sttChannel = EventChannel('private_ai_companion/voice_stt');
 
@@ -62,6 +74,10 @@ class MethodChannelVoicePlatform implements VoicePlatform, TtsVoicePlatform {
 
   @override
   bool get supported => true;
+
+  @override
+  Future<String> extractAudio(String videoPath) =>
+      _call<String>('extractAudio', {'path': videoPath});
 
   Future<T> _call<T>(String method, [Map<String, dynamic>? args]) async {
     try {
@@ -264,11 +280,15 @@ class MethodChannelVoicePlatform implements VoicePlatform, TtsVoicePlatform {
 }
 
 /// 桌面 / 测试 / 不支持的平台：所有操作明确失败，绝不假装成功。
-class NoopVoicePlatform implements VoicePlatform {
+class NoopVoicePlatform
+    implements VoicePlatform, NativeAudioExtractPlatform {
   const NoopVoicePlatform();
 
   @override
   bool get supported => false;
+
+  @override
+  Future<String> extractAudio(String videoPath) async => throw _e;
 
   VoiceException get _e => VoiceException('UNSUPPORTED', '当前设备不支持语音功能（仅 Android 真机可用）');
 

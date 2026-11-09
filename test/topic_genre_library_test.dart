@@ -58,6 +58,26 @@ void main() {
     expect(short, isEmpty, reason: '以下小类不足 20 条：$short');
   });
 
+  test('每个小类不少于 20 条「可直接发送」的话题（v4 可读性补齐）', () {
+    // 复刻 _parseRows 的可读性判定：纯括号动作描写、或正文过短的行会被降权，
+    // 不参与推荐位竞争，等于「不可直接发送」。题材库承诺每小类 ≥20 条可直接发送。
+    final bracketOnly = RegExp(r'^[（(][^）)]*[）)]$');
+    final short = <String>[];
+    for (final g in topicGenres) {
+      for (final s in g.subs) {
+        final rows = genreTopicRows[s.id] ?? const [];
+        var sendable = 0;
+        for (final row in rows) {
+          final body = row.split('|')[1].trim();
+          final low = bracketOnly.hasMatch(body) || body.length < 10;
+          if (!low) sendable++;
+        }
+        if (sendable < 20) short.add('${s.id}($sendable)');
+      }
+    }
+    expect(short, isEmpty, reason: '以下小类可直接发送的话题不足 20 条：$short');
+  });
+
   test('每条话题字段合法：无分隔符泄漏、无空字段、标签与基调可用', () {
     const stages = {'any', 'early', 'familiar', 'close'};
     const tones = {

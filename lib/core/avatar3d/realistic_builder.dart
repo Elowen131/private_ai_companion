@@ -26,6 +26,8 @@ AvatarMesh buildRealisticAvatar(
   PersonaVisualSpec s, {
   AvatarTuning? tuning,
   PhotoPalette? palette,
+  double rimStrength = 0.30,
+  bool contactShadow = true,
 }) {
   final t = tuning ?? AvatarTuning.forStyle(AvatarStyle.realistic, palette: palette);
 
@@ -427,6 +429,8 @@ AvatarMesh buildRealisticAvatar(
     starMotif: s.starMotif,
     cocoaMotif: s.cocoaMotif,
     warmPalette: night,
+    rimStrength: rimStrength,
+    contactShadow: contactShadow,
     frameScale: 1.14,
   );
 }

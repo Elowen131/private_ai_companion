@@ -158,8 +158,14 @@ void main() {
       expect(s, contains('final List<Facet> drawList = [];'));
       expect(s, contains('final drawList = buffer.drawList'));
       expect(s, isNot(contains('buffer.facets.sublist(0, visible)')));
-      // GPU 路径跳过逐面 Color 构造。
-      expect(s, contains('if (!gpu) facet.color'));
+      // GPU 路径跳过逐面 Color 构造：facet.color = Color(...) 必须只在
+      // `if (!gpu)` 的软件分支里出现。用格式无关的正则锁定语义，避免
+      // dart fix / 格式化给 if 加花括号后误伤这条成本契约。
+      expect(
+        RegExp(r'if \(!gpu\)\s*\{?\s*facet\.color\s*=\s*Color\(').hasMatch(s),
+        isTrue,
+        reason: '软件光栅化分支应构造 Color，GPU 分支只读顶点 ARGB',
+      );
     });
 
     test('assets 仍是文件白名单，模型/权重绝不声明进包', () {

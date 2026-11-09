@@ -19,8 +19,9 @@ import android.os.IBinder
  * 通知满足 Android 8+ 前台服务约束；Android 14 注册 foregroundServiceType=specialUse。
  *
  * 命令契约（由 MainActivity 的 overlay 通道转发，亦可由其它组件直接发 Intent）：
- *   ACTION_SHOW   extra: name / avatar / style / transparent -> 启动前台 + 显示悬浮伴生
+ *   ACTION_SHOW   extra: name / avatar / style / transparent / passthrough -> 启动前台 + 显示悬浮伴生
  *   ACTION_UPDATE extra: mood / action                       -> 更新心情/动作
+ *   ACTION_SET_PASSTHROUGH extra: passthrough                -> 动态切换「完全点击透传」
  *   ACTION_HIDE                                            -> 隐藏并停止服务
  *
  * 约束：
@@ -44,6 +45,7 @@ class CompanionOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        isRunning = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -89,6 +91,28 @@ class CompanionOverlayService : Service() {
                 }
             }
 
+            ACTION_SET_PASSTHROUGH -> {
+                val enabled = intent?.getBooleanExtra(EXTRA_PASSTHROUGH, false) ?: false
+                // 记进进程级缓存与 SHOW 参数：服务被系统回收重建后，showFrom 会按这个值
+                // 恢复窗口 flags，用户开的「完全点击透传」不会重启后悄悄失效。
+                pendingPassthrough = enabled
+                lastShow?.putBoolean(EXTRA_PASSTHROUGH, enabled)
+                if (overlay.isShowing()) {
+                    overlay.setPassthrough(enabled)
+                    if (!ensureForeground()) {
+                        stopSelfResult(startId)
+                        START_NOT_STICKY
+                    } else {
+                        START_REDELIVER_INTENT
+                    }
+                } else {
+                    // 窗口未显示时 startService 可能凭空创建了服务，立刻收尾，
+                    // 绝不留一个没有渲染面的孤儿前台服务；值已缓存，下次 SHOW 生效。
+                    stopSelfResult(startId)
+                    START_NOT_STICKY
+                }
+            }
+
             else -> {
                 stopSelfResult(startId)
                 START_NOT_STICKY
@@ -109,6 +133,11 @@ class CompanionOverlayService : Service() {
             stopSelfResult(startId)
             return false
         }
+        // 在 addView 之前恢复透传偏好：CompanionOverlay.show 会按 passthrough 字段
+        // 构建 LayoutParams.flags，先设值才能保证新建窗口就带 FLAG_NOT_TOUCHABLE。
+        overlay.setPassthrough(
+            extras.getBoolean(EXTRA_PASSTHROUGH, pendingPassthrough),
+        )
         val ok = overlay.show(
             extras.getString(EXTRA_NAME) ?: "伴伴",
             extras.getString(EXTRA_AVATAR),
@@ -129,6 +158,7 @@ class CompanionOverlayService : Service() {
     override fun onDestroy() {
         overlay.hide()
         foregroundStarted = false
+        isRunning = false
         super.onDestroy()
     }
 
@@ -193,6 +223,8 @@ class CompanionOverlayService : Service() {
     companion object {
         const val ACTION_SHOW = "com.elowen131.privateaicompanion.overlay.SHOW"
         const val ACTION_UPDATE = "com.elowen131.privateaicompanion.overlay.UPDATE"
+        const val ACTION_SET_PASSTHROUGH =
+            "com.elowen131.privateaicompanion.overlay.SET_PASSTHROUGH"
         const val ACTION_HIDE = "com.elowen131.privateaicompanion.overlay.HIDE"
 
         const val EXTRA_NAME = "name"
@@ -203,6 +235,21 @@ class CompanionOverlayService : Service() {
         const val EXTRA_MODEL_PATH = "modelPath"
         const val EXTRA_MOOD = "mood"
         const val EXTRA_ACTION = "action"
+        const val EXTRA_PASSTHROUGH = "passthrough"
+
+        /**
+         * 服务是否在运行。MainActivity 用它判断「切换透传」时能不能安全地
+         * startService：服务未运行仍发 Intent 会凭空创建一个前台服务。
+         * 进程级缓存，服务被回收重建后由 showFrom 读取并恢复窗口 flags。
+         */
+        @Volatile
+        @JvmStatic
+        var isRunning = false
+
+        /** 用户在设置页选的完全点击透传状态（跨服务实例存活于本进程内）。 */
+        @Volatile
+        @JvmStatic
+        var pendingPassthrough = false
 
         const val CHANNEL_ID = "companion_overlay_channel"
         const val NOTIF_ID = 1001

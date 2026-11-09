@@ -47,6 +47,9 @@ class VoiceCloneService extends ChangeNotifier {
 
   String get providerLabel => _config.provider.label;
 
+  /// 当前是否选用「自建」克隆服务——视频抽音轨走的就是这个地址。
+  bool get providerSelfHosted => _config.provider == CloneProvider.selfHosted;
+
   Future<void> load() async {
     final raw = await prefs.raw(prefsKey);
     if (raw is Map && raw.isNotEmpty) {

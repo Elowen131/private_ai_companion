@@ -130,6 +130,14 @@ Future<void> applySchemaV5(Database db) async {
   await setMeta(db, 'schema_baseline', 'v5');
 }
 
+/// v6：孕期 pending 出生记录（只建表 + 索引，全部 `IF NOT EXISTS` 幂等）。
+Future<void> applySchemaV6(Database db) async {
+  for (final stmt in schemaV6Statements) {
+    await db.execute(stmt);
+  }
+  await setMeta(db, 'schema_baseline', 'v6');
+}
+
 /// 幂等加列：PRAGMA 探测后按需 ALTER。
 Future<void> _ensureColumn(
     DatabaseExecutor db, String table, String column, String decl) async {

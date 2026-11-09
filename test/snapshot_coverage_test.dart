@@ -15,6 +15,7 @@ void main() {
       ...schemaV2Statements,
       ...schemaV3Statements,
       ...schemaV4Statements,
+      ...schemaV6Statements,
     ];
     final createTable = RegExp(r'CREATE TABLE(?: IF NOT EXISTS)?\s+(\w+)');
     final names = <String>{};
@@ -25,7 +26,7 @@ void main() {
       }
     }
 
-    expect(names.length, 36, reason: '表数变化时需同步复核快照白名单');
+    expect(names.length, 37, reason: '表数变化时需同步复核快照白名单');
     expect(snapshotTables.toSet().length, snapshotTables.length);
 
     // 刻意排除：backup_record 是备份目录自身索引，恢复会让本机记录错乱；

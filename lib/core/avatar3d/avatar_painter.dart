@@ -92,6 +92,22 @@ AvatarRegion? pickAvatarRegion(AvatarFrameBuffer buffer, Offset point) {
   return AvatarRegion.values[bestRegion];
 }
 
+/// 点击部位几何高亮：把一个打包的 ARGB 颜色按 [amount] 向白色混合。
+///
+/// 顶层纯函数（只做整数运算，便于纯函数级单测）。只提亮 RGB、保留 alpha；
+/// 调用方仅在「命中面」上调用它，未命中面直接沿用原 ARGB，因此逐字节不变。
+/// [amount] 夹到 0..1，任意 32 位整数输入都不会抛异常（透明色 / 极端值安全）。
+int highlightArgb(int argb, [double amount = 0.35]) {
+  final t = amount.isNaN ? 0.35 : amount.clamp(0.0, 1.0);
+  if (t <= 0) return argb;
+  final a = (argb >> 24) & 0xFF;
+  final r = (argb >> 16) & 0xFF;
+  final g = (argb >> 8) & 0xFF;
+  final b = argb & 0xFF;
+  int mix(int c) => (c + (255 - c) * t).round() & 0xFF;
+  return (a << 24) | (mix(r) << 16) | (mix(g) << 8) | mix(b);
+}
+
 /// 真 3D 骨骼渲染器：线性混合蒙皮（LBS）+ 透视投影 + 方向光 + 画家算法。
 ///
 /// 两种提交方式共用同一套骨骼蒙皮与投影结果：
@@ -115,6 +131,10 @@ class AvatarPainter extends CustomPainter {
   final bool gpu;
   final AvatarFrameBuffer buffer;
 
+  /// 点击命中的部位：仅该部位的面在 paint 阶段做几何高亮。
+  /// 默认 null（不高亮），保证所有既有调用点与逐像素回归测试画面不变。
+  final AvatarRegion? highlightRegion;
+
   static const int _bucketCount = 24;
 
   AvatarPainter({
@@ -129,6 +149,7 @@ class AvatarPainter extends CustomPainter {
     this.atmosphere = true,
     this.phase = 0,
     this.gpu = true,
+    this.highlightRegion,
   });
 
   @override
@@ -138,6 +159,8 @@ class AvatarPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final triCount = mesh.triangleCount;
     final regions = mesh.regionIds;
+    // 命中部位的 index；null 表示本帧不做高亮（所有既有调用点的默认值）。
+    final highlightIndex = highlightRegion?.index;
     buffer.ensure(mesh.vertexCount, triCount);
 
     // 1) 骨骼蒙皮：把 bind pose 顶点变换到当前姿态
@@ -155,6 +178,10 @@ class AvatarPainter extends CustomPainter {
     final ox = size.width / 2;
     final oy = size.height / 2;
 
+    var minX = double.infinity;
+    var maxX = -double.infinity;
+    var minY = double.infinity;
+    var maxY = -double.infinity;
     for (var v = 0; v < mesh.vertexCount; v++) {
       final px = buffer.skinnedPos[v * 3];
       final py = buffer.skinnedPos[v * 3 + 1] - modelCenterY;
@@ -164,9 +191,15 @@ class AvatarPainter extends CustomPainter {
       final ry = py * cp - rz * sp;
       final rz2 = py * sp + rz * cp;
       final f = focal / (focal - rz2);
-      buffer.screenX[v] = ox + rx * f * scale;
-      buffer.screenY[v] = oy - ry * f * scale;
+      final sxp = ox + rx * f * scale;
+      final syp = oy - ry * f * scale;
+      buffer.screenX[v] = sxp;
+      buffer.screenY[v] = syp;
       buffer.screenZ[v] = rz2;
+      if (sxp < minX) minX = sxp;
+      if (sxp > maxX) maxX = sxp;
+      if (syp < minY) minY = syp;
+      if (syp > maxY) maxY = syp;
     }
 
     const light = Vec3(-0.38, 0.72, 0.58);
@@ -190,6 +223,16 @@ class AvatarPainter extends CustomPainter {
         var r = colors[v * 4] * shade;
         var g = colors[v * 4 + 1] * shade;
         var b = colors[v * 4 + 2] * shade;
+        // 边缘菲涅尔轮廓光：侧缘（法线朝相机 z≈0）加一笔冷白，让剪影浮起来。
+        // 只依赖相机空间法线 z（nzX），与姿态/光照无关，结果确定。
+        if (mesh.rimStrength > 0) {
+          final nz = nzX.clamp(-1.0, 1.0);
+          final fres = (1 - nz) * (1 - nz); // 0=正对相机，1=侧缘
+          final rim = fres * fres * mesh.rimStrength;
+          r += rim * 0.85;
+          g += rim * 0.90;
+          b += rim * 1.0;
+        }
         if (moodTint > 0) {
           r = r * (1 - moodTint) + tint.r * moodTint;
           g = g * (1 - moodTint) + tint.g * moodTint;
@@ -243,6 +286,14 @@ class AvatarPainter extends CustomPainter {
       g = g / 3 * shade;
       b = b / 3 * shade;
       a = a / 3;
+      if (mesh.rimStrength > 0) {
+        final nz = nzX.clamp(-1.0, 1.0);
+        final fres = (1 - nz) * (1 - nz);
+        final rim = fres * fres * mesh.rimStrength;
+        r += rim * 0.85;
+        g += rim * 0.90;
+        b += rim * 1.0;
+      }
       if (moodTint > 0) {
         r = r * (1 - moodTint) + tint.r * moodTint;
         g = g * (1 - moodTint) + tint.g * moodTint;
@@ -258,12 +309,18 @@ class AvatarPainter extends CustomPainter {
       facet.cy = cy2;
       facet.depth = (buffer.screenZ[i0] + buffer.screenZ[i1] + buffer.screenZ[i2]) / 3;
       facet.region = regions[i0];
+      // 几何高亮：只对命中部位的面把颜色向白色混合 0.35，未命中面原样保留。
+      final isHighlight = highlightIndex != null && facet.region == highlightIndex;
       // 只有软件光栅化读 facet.color；GPU 路径用的是下面三个顶点 ARGB。
-      if (!gpu) facet.color = Color(_toArgb(a, r, g, b));
+      if (!gpu) {
+        facet.color = Color(
+          isHighlight ? highlightArgb(_toArgb(a, r, g, b)) : _toArgb(a, r, g, b));
+      }
       if (gpu) {
-        facet.c0 = buffer.argb[i0];
-        facet.c1 = buffer.argb[i1];
-        facet.c2 = buffer.argb[i2];
+        // 顶点色按面复制后再提亮，共享顶点的相邻面（未命中）不会被波及。
+        facet.c0 = isHighlight ? highlightArgb(buffer.argb[i0]) : buffer.argb[i0];
+        facet.c1 = isHighlight ? highlightArgb(buffer.argb[i1]) : buffer.argb[i1];
+        facet.c2 = isHighlight ? highlightArgb(buffer.argb[i2]) : buffer.argb[i2];
       }
       visible++;
     }
@@ -289,11 +346,16 @@ class AvatarPainter extends CustomPainter {
         f.cx = buffer.screenX[i2]; f.cy = buffer.screenY[i2];
         f.depth = (buffer.screenZ[i0] + buffer.screenZ[i1] + buffer.screenZ[i2]) / 3;
         f.region = regions[i0];
-        if (!gpu) f.color = Color(_toArgb(1.0, r / 3, g / 3, b / 3));
+        // 与主路径保持同样的高亮规则：命中面提亮，其余面不变。
+        final isHighlight = highlightIndex != null && f.region == highlightIndex;
+        if (!gpu) {
+          final base = _toArgb(1.0, r / 3, g / 3, b / 3);
+          f.color = Color(isHighlight ? highlightArgb(base) : base);
+        }
         if (gpu) {
-          f.c0 = buffer.argb[i0];
-          f.c1 = buffer.argb[i1];
-          f.c2 = buffer.argb[i2];
+          f.c0 = isHighlight ? highlightArgb(buffer.argb[i0]) : buffer.argb[i0];
+          f.c1 = isHighlight ? highlightArgb(buffer.argb[i1]) : buffer.argb[i1];
+          f.c2 = isHighlight ? highlightArgb(buffer.argb[i2]) : buffer.argb[i2];
         }
         visible++;
       }
@@ -310,6 +372,9 @@ class AvatarPainter extends CustomPainter {
     }
     drawList.sort((p, q) => p.depth.compareTo(q.depth));
 
+    if (mesh.contactShadow) {
+      _drawContactShadow(canvas, minX, maxX, maxY);
+    }
     if (gpu) {
       _drawGpu(canvas, drawList);
     } else {
@@ -390,6 +455,41 @@ class AvatarPainter extends CustomPainter {
   static int _toArgb(double a, double r, double g, double b) {
     int ch(double v) => (v.clamp(0.0, 1.0) * 255).round() & 0xFF;
     return (ch(a) << 24) | (ch(r) << 16) | (ch(g) << 8) | ch(b);
+  }
+
+  /// 脚下的柔和接触阴影：把角色「落」在地面上，而不是悬浮在真空里。
+  ///
+  /// 用本帧投影出的水平/竖直包围盒推算落点，因此旋转视角、骨骼动作后
+  /// 阴影自动跟随角色轮廓；强度很弱，只为一点接地感，不喧宾夺主。
+  void _drawContactShadow(
+    Canvas canvas,
+    double minX,
+    double maxX,
+    double maxY,
+  ) {
+    if (!minX.isFinite || !maxX.isFinite || !maxY.isFinite) return;
+    final cx = (minX + maxX) / 2;
+    final rx = (maxX - minX) * 0.42;
+    if (rx <= 0) return;
+    final ry = rx * 0.18;
+    final cy = maxY + ry * 0.5;
+    final rect = Rect.fromCenter(
+      center: Offset(cx, cy),
+      width: rx * 2,
+      height: ry * 2,
+    );
+    canvas.drawOval(
+      rect,
+      Paint()
+        ..shader = const RadialGradient(
+          colors: [
+            Color(0x52000000),
+            Color(0x1A000000),
+            Colors.transparent,
+          ],
+          stops: [0.0, 0.55, 1.0],
+        ).createShader(rect),
+    );
   }
 
   void _drawAtmosphere(Canvas canvas, Size size) {

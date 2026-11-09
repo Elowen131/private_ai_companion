@@ -25,6 +25,8 @@ AvatarMesh buildChibiAvatar(
   AvatarStyle style = AvatarStyle.chibi,
   AvatarTuning? tuning,
   PhotoPalette? palette,
+  double rimStrength = 0.32,
+  bool contactShadow = true,
 }) {
   final t = tuning ?? AvatarTuning.forStyle(style, palette: palette);
   // 写实档不是「Q 版缩头」，而是另一套 1:6.5 比例与服装结构的几何；
@@ -454,6 +456,8 @@ AvatarMesh buildChibiAvatar(
     starMotif: s.starMotif,
     cocoaMotif: s.cocoaMotif,
     warmPalette: night,
+    rimStrength: rimStrength,
+    contactShadow: contactShadow,
   );
 }
 

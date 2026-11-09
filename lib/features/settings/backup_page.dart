@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/core/backup/backup_service.dart';
 import 'package:private_ai_companion/core/backup/export_service.dart';
+import 'package:private_ai_companion/core/backup/export_share_service.dart';
 import 'package:private_ai_companion/core/security/snapshot_cipher.dart';
 import 'package:private_ai_companion/data/database/app_database.dart';
 import 'package:private_ai_companion/features/settings/topic_library_page.dart';
@@ -213,6 +214,29 @@ class _BackupPageState extends State<BackupPage> {
           '（${r.encrypted ? 'AES-256-GCM 加密' : '明文'}）\n文件名：${r.fileName}');
     } catch (e) {
       _toast('导出失败：$e');
+    }
+    if (mounted) setState(() => _busy = false);
+    await _reload();
+  }
+
+  /// 生成导出文件后直接调起系统分享面板（缺口 #113）。
+  /// 复用与 _exportChats 一致的 loading / 错误提示 / mounted 检查模式。
+  Future<void> _shareExport() async {
+    final svc = _export;
+    if (svc == null) {
+      _toast('导出服务未就绪');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final r = await svc.exportChats(format: 'json', encrypted: true);
+      final ok = await ExportShareService().shareFile(
+        path: r.path,
+        subject: '聊天导出 ${r.fileName}',
+      );
+      _toast(ok ? '已调起分享：${r.fileName}' : '分享未完成：系统分享面板不可用');
+    } catch (e) {
+      _toast('分享失败：$e');
     }
     if (mounted) setState(() => _busy = false);
     await _reload();
@@ -670,6 +694,11 @@ class _BackupPageState extends State<BackupPage> {
                 icon: const Icon(Icons.warning_amber_outlined, size: 16),
                 label: const Text('明文导出'),
                 onPressed: _busy ? null : () => _exportChats(encrypted: false),
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.share_outlined, size: 18),
+                label: const Text('分享导出文件'),
+                onPressed: _busy ? null : _shareExport,
               ),
             ],
           ),

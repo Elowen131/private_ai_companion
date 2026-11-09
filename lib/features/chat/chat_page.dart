@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:private_ai_companion/app/di.dart';
+import 'package:private_ai_companion/core/i18n/app_locale.dart';
 import 'package:private_ai_companion/core/chat/chat_orchestrator.dart';
 import 'package:private_ai_companion/core/chat/message_lifecycle.dart';
 import 'package:private_ai_companion/core/constants.dart';
@@ -29,7 +30,86 @@ import 'package:private_ai_companion/features/chat/widgets/quick_keys.dart';
 import 'package:private_ai_companion/features/settings/diary_page.dart';
 import 'package:private_ai_companion/features/settings/plot_edit_page.dart';
 import 'package:private_ai_companion/features/settings/profile_lock_page.dart';
+import 'package:private_ai_companion/features/memory/memory_page.dart';
 import 'package:private_ai_companion/features/role_create/role_create_page.dart';
+import 'package:private_ai_companion/features/chat/widgets/gift_sheet.dart';
+import 'package:private_ai_companion/features/chat/virtual_phone_page.dart';
+import 'package:private_ai_companion/features/chat/video_chat_page.dart';
+import 'package:private_ai_companion/core/gift/gift_service.dart';
+import 'package:private_ai_companion/core/share/wechat_share_service.dart';
+
+/// 角色面板里「对这个角色」的一条动作描述。
+/// 抽成顶层纯数据结构 + [chatPanelActions] 纯函数，便于单元测试直接断言
+/// 动作集合（不依赖 GetIt / 数据库 / BuildContext）。
+class PanelActionSpec {
+  final String key;
+  final IconData icon;
+  final String label;
+  final Widget Function() builder;
+
+  const PanelActionSpec({
+    required this.key,
+    required this.icon,
+    required this.label,
+    required this.builder,
+  });
+}
+
+/// 角色面板动作清单（顺序即 UI 展示顺序，新增项一律追加在末尾）。
+/// 纯函数：[tr] 由调用方注入当前语言译文，[personaId] / [persona] 供各跳转页
+/// 构造器使用；本函数不读 GetIt、不查库、不接触 BuildContext，因此可在
+/// test/chat_memory_shortcut_test.dart 里直接调用并断言「记忆」入口存在。
+/// 由 _ChatPageState._showStatePanel 实际消费，渲染成角色面板的 Row。
+List<PanelActionSpec> chatPanelActions({
+  required String personaId,
+  required Persona? persona,
+  required String Function(String key) tr,
+}) {
+  return [
+    // 原有 5 项：图标 / 文案 / 顺序保持不变。
+    PanelActionSpec(
+      key: 'edit_persona',
+      icon: Icons.badge_outlined,
+      label: tr('pa_edit_persona'),
+      builder: () => RoleCreatePage(initial: persona),
+    ),
+    PanelActionSpec(
+      key: 'diary',
+      icon: Icons.menu_book_outlined,
+      label: tr('pa_diary'),
+      builder: () => DiaryPage(initialPersonaId: personaId),
+    ),
+    PanelActionSpec(
+      key: 'plot',
+      icon: Icons.edit_note_outlined,
+      label: tr('pa_plot'),
+      builder: () => PlotEditPage(initialPersonaId: personaId),
+    ),
+    PanelActionSpec(
+      key: 'lock',
+      icon: Icons.lock_outline,
+      label: tr('pa_lock'),
+      builder: () => ProfileLockPage(initialPersonaId: personaId),
+    ),
+    PanelActionSpec(
+      key: 'voice',
+      icon: Icons.record_voice_over_outlined,
+      label: tr('pa_voice'),
+      builder: () => PersonaVoicePage(
+        personaId: personaId,
+        personaName: persona?.name ?? tr('character'),
+      ),
+    ),
+    // #103 新增：聊天内直达「记忆」，此前仅设置页有入口。
+    // 文案刻意用中文常量（strings.dart 未收录 pa_memory，避免 tr 回退成 key）。
+    PanelActionSpec(
+      key: 'memory',
+      icon: Icons.psychology_outlined,
+      label: '记忆',
+      builder: () => MemoryPage(personaId: personaId),
+    ),
+  ];
+}
 
 /// 剧情聊天主页面（方案 4.2）。
 /// 集成：（）动作渲染、AI 提示按钮（随机 20 条）、剧情推进提示、长按菜单
@@ -59,6 +139,9 @@ class _ChatPageState extends State<ChatPage> {
   final _convRepo = getIt<ConversationRepository>();
   final _voice = getIt<VoiceService>();
   final _settings = getIt<GlobalSettings>();
+
+  /// 便捷取当前界面语言文案（缺失翻译时安全回退到中文原文）。
+  AppLocaleController get _l10n => getIt<AppLocaleController>();
 
   /// 当前会话 id；若进入时为空，则在首次交互/加载时惰性创建单聊会话。
   String? _activeConversationId;
@@ -197,7 +280,7 @@ class _ChatPageState extends State<ChatPage> {
     if (!mounted) return;
     if (p == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('角色信息还在加载，稍等一下再试')),
+        SnackBar(content: Text(_l10n.tr('snack_role_loading'))),
       );
       return;
     }
@@ -364,7 +447,7 @@ class _ChatPageState extends State<ChatPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('生成失败：$e')),
+          SnackBar(content: Text('${_l10n.tr('gen_failed')}$e')),
         );
       }
     } finally {
@@ -383,7 +466,7 @@ class _ChatPageState extends State<ChatPage> {
     if (!mounted) return;
     if (!caps.recorder && !caps.stt) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('这台设备不支持语音（仅 Android 真机可用）')),
+        SnackBar(content: Text(_l10n.tr('snack_no_voice'))),
       );
       return;
     }
@@ -403,6 +486,67 @@ class _ChatPageState extends State<ChatPage> {
     }
     final spoken = r.text.trim().isEmpty ? '（发来了一段语音）' : r.text.trim();
     await _send(spoken, voicePath: r.clipPath, voiceDurationMs: r.durationMs);
+  }
+
+  /// 送礼物：选礼物 → 记录入库 → 把情境喂给对话引擎让角色自然回应。
+  Future<void> _sendGift() async {
+    final p = _persona;
+    if (!mounted || p == null) return;
+    final gift = await GiftSheet.show(context, personaName: p.name);
+    if (!mounted || gift == null) return;
+    await getIt<GiftService>().send(personaId: widget.personaId, gift: gift);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${_l10n.tr('gift_sent')} ${gift.emoji} ${gift.name}')),
+    );
+    // 让角色自然回应这份礼物（复用统一对话流程）。
+    await _send(getIt<GiftService>().reactionSeed(gift));
+  }
+
+  /// 查看角色的虚拟手机（陪伴玩法，不读取用户真实设备数据）。
+  Future<void> _openVirtualPhone() async {
+    final p = _persona;
+    if (!mounted || p == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => VirtualPhonePage(persona: p)),
+    );
+  }
+
+  /// 视频聊天（模拟视频通话：全屏 3D 形象 + 实时语音/文字）。
+  Future<void> _openVideoChat() async {
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => VideoChatPage(personaId: widget.personaId),
+      ),
+    );
+  }
+
+  /// 合规分享到微信：把当前对话片段导出为纯文本，调起微信分享；
+  /// 设备未接入微信分享能力时回退为复制到剪贴板（由用户自行粘贴）。
+  /// 不读取任何微信本地数据，不做自动收发 / 外挂式接管。
+  Future<void> _shareConversation() async {
+    if (!mounted) return;
+    final lines = <String>[];
+    for (final m in _messages.reversed.take(15).toList().reversed) {
+      final who = m.senderType == 'char'
+          ? (_persona?.name ?? 'TA')
+          : '我';
+      final text = m.content.replaceAll(RegExp(r'（[^）]*）'), '').trim();
+      if (text.isNotEmpty) lines.add('$who：$text');
+    }
+    final text = WechatShareService.buildConversationText(
+      _persona?.name ?? 'TA',
+      lines,
+    );
+    final result = await getIt<WechatShareService>().shareText(text);
+    if (!mounted) return;
+    final msg = switch (result) {
+      WechatShareResult.shared => _l10n.tr('share_shared'),
+      WechatShareResult.copied => _l10n.tr('share_copied'),
+      WechatShareResult.unsupported => _l10n.tr('share_unsupported'),
+    };
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   Future<void> _playVoice(Message m) async {
@@ -489,14 +633,15 @@ class _ChatPageState extends State<ChatPage> {
       return await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('重新发送'),
+          title: Text(_l10n.tr('dlg_resend_title')),
           content: TextField(controller: c, maxLines: 3),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(_l10n.tr('cancel'))),
             TextButton(
                 onPressed: () => Navigator.pop(ctx, c.text),
-                child: const Text('发送')),
+                child: Text(_l10n.tr('dlg_send'))),
           ],
         ),
       );
@@ -578,16 +723,18 @@ class _ChatPageState extends State<ChatPage> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('剧情推进提示'),
+        title: Text(_l10n.tr('dlg_plot_title')),
         content: Text(hint),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('忽略')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(_l10n.tr('dlg_ignore'))),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
               _controller.text = hint;
             },
-            child: const Text('采用'),
+            child: Text(_l10n.tr('dlg_adopt')),
           ),
         ],
       ),
@@ -609,26 +756,26 @@ class _ChatPageState extends State<ChatPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${_persona?.name ?? ''} 的状态',
+              Text('${_persona?.name ?? ''}${_l10n.tr('state_status')}',
                   style: const TextStyle(
                       fontSize: 16, fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
-              _bar('心情', s.mood),
-              _bar('好感', s.favor),
-              _bar('爱意', s.love),
-              _bar('愤怒', s.anger),
-              _bar('性欲', s.lust),
-              _bar('理智', s.reason),
+              _bar(_l10n.tr('bar_mood'), s.mood),
+              _bar(_l10n.tr('bar_favor'), s.favor),
+              _bar(_l10n.tr('bar_love'), s.love),
+              _bar(_l10n.tr('bar_anger'), s.anger),
+              _bar(_l10n.tr('bar_lust'), s.lust),
+              _bar(_l10n.tr('bar_reason'), s.reason),
               const SizedBox(height: 8),
-              Text('内心 OS：${s.innerOs.isEmpty ? '（暂无）' : s.innerOs}'),
-              Text('当前地点：${s.location.isEmpty ? '（未设定）' : s.location}'),
+              Text('${_l10n.tr('state_inner_os')}${s.innerOs.isEmpty ? _l10n.tr('empty_hint') : s.innerOs}'),
+              Text('${_l10n.tr('state_location')}${s.location.isEmpty ? _l10n.tr('empty_hint') : s.location}'),
               const SizedBox(height: 16),
               const Divider(height: 1),
               const SizedBox(height: 12),
               // 这些能力原先只藏在「设置 → 世界模拟」里，用户在聊天中根本不会去翻。
               // 放在角色面板里，是「我在跟这个角色相处」时最自然的入口。
               Text(
-                '对这个角色',
+                _l10n.tr('panel_for_char'),
                 style: TextStyle(
                   fontSize: 11.5,
                   fontWeight: FontWeight.w600,
@@ -638,23 +785,15 @@ class _ChatPageState extends State<ChatPage> {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  _panelAction(ctx, Icons.badge_outlined, '编辑人设',
-                      () => RoleCreatePage(initial: _persona)),
-                  _panelAction(ctx, Icons.menu_book_outlined, '私密日记',
-                      () => DiaryPage(initialPersonaId: widget.personaId)),
-                  _panelAction(ctx, Icons.edit_note_outlined, '剧情编辑',
-                      () => PlotEditPage(initialPersonaId: widget.personaId)),
-                  _panelAction(ctx, Icons.lock_outline, '档案锁',
-                      () => ProfileLockPage(initialPersonaId: widget.personaId)),
-                  _panelAction(
-                    ctx,
-                    Icons.record_voice_over_outlined,
-                    '声音',
-                    () => PersonaVoicePage(
-                      personaId: widget.personaId,
-                      personaName: _persona?.name ?? '角色',
-                    ),
-                  ),
+                  // 每项仍是 Expanded（等宽自适应）：追加第 6 项「记忆」后
+                  // 6 等分列宽、文字过长时自动换行，窄屏也不会 RenderFlex overflow。
+                  // 清单来自顶层纯函数，便于 test/chat_memory_shortcut_test.dart 断言。
+                  for (final a in chatPanelActions(
+                    personaId: widget.personaId,
+                    persona: _persona,
+                    tr: _l10n.tr,
+                  ))
+                    _panelAction(ctx, a.icon, a.label, a.builder),
                 ],
               ),
             ],
@@ -715,15 +854,15 @@ class _ChatPageState extends State<ChatPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('对方撤回了一条消息'),
-        content: const Text('要查看原来的内容吗？查看后这条消息仍不计入角色记忆。'),
+        title: Text(_l10n.tr('dlg_recall_title')),
+        content: Text(_l10n.tr('dlg_recall_content')),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('不查看')),
+              child: Text(_l10n.tr('dlg_dont_view'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('查看')),
+              child: Text(_l10n.tr('dlg_view'))),
         ],
       ),
     );
@@ -739,19 +878,27 @@ class _ChatPageState extends State<ChatPage> {
     if (m.senderType == 'char') {
       items.add(PopupMenuItem(
         value: 'speak',
-        child: Text(_voice.speaking ? '停止朗读' : '用他的声音念给我听'),
+        child: Text(_voice.speaking
+            ? _l10n.tr('lp_stop_speak')
+            : _l10n.tr('lp_speak')),
       ));
-      items.add(const PopupMenuItem(value: 'delete', child: Text('删除这条 AI 消息')));
+      items.add(PopupMenuItem(
+          value: 'delete', child: Text(_l10n.tr('lp_delete_ai'))));
       if (m.recalled && m.recallPromptShown && !m.recallViewedByUser) {
-        items.add(const PopupMenuItem(value: 'view', child: Text('查看撤回内容')));
+        items.add(PopupMenuItem(
+            value: 'view', child: Text(_l10n.tr('lp_view'))));
       }
     } else if (m.senderType == 'user') {
-      items.add(const PopupMenuItem(value: 'resend', child: Text('重新发送（角色遗忘旧回复）')));
-      items.add(const PopupMenuItem(value: 'recall', child: Text('撤回这条消息')));
+      items.add(PopupMenuItem(
+          value: 'resend', child: Text(_l10n.tr('lp_resend'))));
+      items.add(PopupMenuItem(
+          value: 'recall', child: Text(_l10n.tr('lp_recall'))));
     }
     items.add(PopupMenuItem(
       value: 'important',
-      child: Text(m.isImportant ? '取消重要标记' : '标记为重要记忆'),
+      child: Text(m.isImportant
+          ? _l10n.tr('lp_important_off')
+          : _l10n.tr('lp_important_on')),
     ));
 
     final choice = await showMenu<String>(
@@ -808,7 +955,7 @@ class _ChatPageState extends State<ChatPage> {
               const SizedBox(width: 8),
               // 点头像/名字打开角色面板（状态 + 对这个角色的操作）。
               // 补一个小箭头，否则没人知道标题可点。
-              Text(_persona?.name ?? '聊天'),
+              Text(_persona?.name ?? _l10n.tr('chat_default_title')),
               Icon(
                 Icons.expand_more,
                 size: 16,
@@ -834,9 +981,31 @@ class _ChatPageState extends State<ChatPage> {
           IconButton(
               icon: const Icon(Icons.palette_outlined),
               onPressed: _showAppearance,
-              tooltip: '聊天外观（头像 / 背景）'),
-          IconButton(icon: const Icon(Icons.lightbulb_outline), onPressed: _showPlotHint, tooltip: '剧情推进'),
-          IconButton(icon: const Icon(Icons.auto_awesome), onPressed: _showSuggestions, tooltip: 'AI 提示'),
+              tooltip: _l10n.tr('tt_appearance')),
+          IconButton(
+              icon: const Icon(Icons.lightbulb_outline),
+              onPressed: _showPlotHint,
+              tooltip: _l10n.tr('tt_plot_hint')),
+          IconButton(
+              icon: const Icon(Icons.auto_awesome),
+              onPressed: _showSuggestions,
+              tooltip: _l10n.tr('tt_ai_tips')),
+          IconButton(
+              icon: const Icon(Icons.card_giftcard_outlined),
+              onPressed: _sendGift,
+              tooltip: _l10n.tr('tt_gift')),
+          IconButton(
+              icon: const Icon(Icons.smartphone_outlined),
+              onPressed: _openVirtualPhone,
+              tooltip: _l10n.tr('tt_phone')),
+          IconButton(
+              icon: const Icon(Icons.videocam_outlined),
+              onPressed: _openVideoChat,
+              tooltip: _l10n.tr('tt_video')),
+          IconButton(
+              icon: const Icon(Icons.share_outlined),
+              onPressed: _shareConversation,
+              tooltip: _l10n.tr('tt_share')),
         ],
       ),
       body: Column(
@@ -863,7 +1032,9 @@ class _ChatPageState extends State<ChatPage> {
                       child: ValueListenableBuilder<int>(
                         valueListenable: _streamVersion,
                         builder: (_, _, _) => Text(
-                          _streamingText.isEmpty ? '对方正在输入…' : _streamingText,
+                          _streamingText.isEmpty
+                              ? _l10n.tr('typing')
+                              : _streamingText,
                         ),
                       ),
                     ),
@@ -902,7 +1073,7 @@ class _ChatPageState extends State<ChatPage> {
                       controller: _controller,
                       focusNode: _inputFocus,
                       decoration: InputDecoration(
-                        hintText: '说点什么…可用（）描写动作神态',
+                        hintText: _l10n.tr('input_hint'),
                         // 圆角与左侧「（）」快捷键胶囊统一，避免两个控件风格割裂。
                         border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10)),
@@ -920,7 +1091,7 @@ class _ChatPageState extends State<ChatPage> {
                           ? Theme.of(context).colorScheme.error
                           : null,
                     ),
-                    tooltip: '语音（可录一条发出去，也可以只说一句转成文字）',
+                    tooltip: _l10n.tr('tt_mic'),
                     onPressed: _openVoiceSheet,
                   ),
                   IconButton(

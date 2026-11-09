@@ -16,6 +16,7 @@ import 'package:private_ai_companion/features/chat/chat_list_page.dart';
 import 'package:private_ai_companion/features/moments/moments_page.dart';
 import 'package:private_ai_companion/features/desktop/desktop_page.dart';
 import 'package:private_ai_companion/features/settings/settings_page.dart';
+import 'package:private_ai_companion/core/i18n/app_locale.dart';
 
 /// 应用主壳：底部四 Tab（聊天 / 朋友圈 / 桌面伴生 / 我的）。
 class AppShell extends StatefulWidget {
@@ -31,7 +32,8 @@ class _AppShellState extends State<AppShell> {
   late int _index;
   int _rev = 0; // 数据变化后强制重建 Tab 页，触发 FutureBuilder 重新拉取
   int _chatRev = 0; // 仅切回「聊天」Tab 时递增：让列表重查库，跨 Tab 新建的角色立刻可见
-  final _titles = const ['聊天', '朋友圈', '桌面伴生', '我的'];
+  // 底部四 Tab 对应的文案键，构建时按当前语言渲染。
+  static const _titleKeys = ['chat', 'moments', 'desktop_companion', 'profile'];
 
   @override
   void initState() {
@@ -133,7 +135,8 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_titles[_index])),
+      appBar: AppBar(
+          title: Text(getIt<AppLocaleController>().tr(_titleKeys[_index]))),
       body: IndexedStack(
         index: _index,
         children: [
@@ -151,11 +154,17 @@ class _AppShellState extends State<AppShell> {
           _index = i;
         }),
         type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.chat_bubble_outline), label: '聊天'),
-          BottomNavigationBarItem(icon: Icon(Icons.photo_album_outlined), label: '朋友圈'),
-          BottomNavigationBarItem(icon: Icon(Icons.widgets_outlined), label: '桌面伴生'),
-          BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: '我的'),
+        items: [
+          for (var i = 0; i < _titleKeys.length; i++)
+            BottomNavigationBarItem(
+              icon: const [
+                Icon(Icons.chat_bubble_outline),
+                Icon(Icons.photo_album_outlined),
+                Icon(Icons.widgets_outlined),
+                Icon(Icons.person_outline),
+              ][i],
+              label: getIt<AppLocaleController>().tr(_titleKeys[i]),
+            ),
         ],
       ),
     );

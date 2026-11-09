@@ -127,19 +127,34 @@ void main() {
     await pumpWithIo(
         tester, const Scaffold(body: SettingsPage()));
 
-    // 首屏该有的：全局偏好、语言、通知、角色管理、端侧模型、备份。
+    final scrollable = find.byType(Scrollable).first;
+
+    // 首屏该有的：全局偏好、语言、通知，以及新增的「常用」置顶入口。
+    // 设置中心补了搜索框 / 跨 Tab 引导卡 / 常用置顶区后，首屏垂直空间变紧，
+    // 「角色管理」所在分区可能落到懒构建范围之外，故与「端侧模型」一样先滚再断言。
     expect(find.text('全局偏好'), findsOneWidget);
-    expect(find.text('语言 / Language'), findsOneWidget);
+    expect(find.text('语言'), findsOneWidget,
+        reason: '设置页「语言」入口已走 tr() 翻译，system/zh 下渲染为「语言」');
     expect(find.text('通知'), findsOneWidget);
+    expect(find.text('常用'), findsOneWidget,
+        reason: '常用置顶区必须在首屏，三个高频入口点一下直达');
+    expect(find.byType(TextField), findsOneWidget,
+        reason: '设置搜索框必须可达');
+    await tester.scrollUntilVisible(find.text('角色管理'), 220,
+        scrollable: scrollable);
     expect(find.text('角色管理'), findsOneWidget);
+    // 端侧模型在「模型与推理」分区，可能落在首屏可视区之下；设置页是 ListView
+    // （懒构建），离屏分区不会预先 build，故先滚到视图内再断言其可达。
+    await tester.scrollUntilVisible(find.text('端侧模型'), 220,
+        scrollable: scrollable);
     expect(find.text('端侧模型'), findsOneWidget);
-    // 低频项默认不在首屏（也没被展开）。
+
+    // 低频项默认不在首屏（也没被展开，折叠区子项未 build）。
     expect(find.text('世界与规则'), findsNothing);
     expect(find.text('人设自检（调试）'), findsNothing);
     // 「规划中」这批开关已经全部落地，占位行必须消失。
     expect(find.text('规划中（尚未实现）'), findsNothing);
 
-    final scrollable = find.byType(Scrollable).first;
     await tester.scrollUntilVisible(find.text('更多设置'), 220,
         scrollable: scrollable);
     await tester.tap(find.text('更多设置'));

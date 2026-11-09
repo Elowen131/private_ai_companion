@@ -322,6 +322,8 @@ Uint8List encodeGlb(
         'centerY': mesh.centerY,
         'toonSteps': mesh.toonSteps,
         'specularStrength': mesh.specularStrength,
+        'rimStrength': mesh.rimStrength,
+        'contactShadow': mesh.contactShadow,
         'vertexCount': mesh.vertexCount,
         'triangleCount': mesh.triangleCount,
         'boneCount': mesh.boneCount,
@@ -595,6 +597,8 @@ GlbAvatar decodeGlb(Uint8List bytes) {
     toonSteps: (extras['toonSteps'] as num?)?.toInt() ?? 0,
     specularStrength:
         (extras['specularStrength'] as num?)?.toDouble() ?? 0.0,
+    rimStrength: (extras['rimStrength'] as num?)?.toDouble() ?? 0.0,
+    contactShadow: extras['contactShadow'] == true,
   );
   mesh.computeBindMatrices();
 

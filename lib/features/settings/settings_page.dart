@@ -22,6 +22,11 @@ import 'package:private_ai_companion/features/settings/topic_library_page.dart';
 import 'package:private_ai_companion/features/settings/widgets/overlay_toggle_tile.dart';
 import 'package:private_ai_companion/features/settings/widgets/settings_kit.dart';
 import 'package:private_ai_companion/features/settings/world_rules_page.dart';
+import 'package:private_ai_companion/features/settings/wechat_sync_settings_page.dart';
+import 'package:private_ai_companion/features/life/life_game_page.dart';
+import 'package:private_ai_companion/app/router.dart';
+import 'package:private_ai_companion/core/prefs/app_prefs.dart';
+import 'package:private_ai_companion/features/settings/notification_center_page.dart';
 
 /// 设置中心。
 ///
@@ -33,101 +38,373 @@ import 'package:private_ai_companion/features/settings/world_rules_page.dart';
 /// 唯一不变的产品原则：不放置任何「看起来能点、实际什么都不做」的控件。
 /// 曾经标着「规划中」的那批开关（全局偏好 / 通知 / 权限 / 应用锁 / 隐私空间）
 /// 现在全部落地，并且每一项都真的接在运行时上。
-class SettingsPage extends StatelessWidget {
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
   @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  final TextEditingController _searchCtl = TextEditingController();
+  String _query = '';
+  bool _showOnboarding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOnboarding();
+  }
+
+  @override
+  void dispose() {
+    _searchCtl.dispose();
+    super.dispose();
+  }
+
+  /// 跨 Tab 首启引导卡只在用户没关闭过时出现；关闭状态由 [AppPrefs] 持久化。
+  /// 测试环境未注册 AppPrefs 时静默跳过，不影响既有回归。
+  Future<void> _loadOnboarding() async {
+    if (!getIt.isRegistered<AppPrefs>()) return;
+    try {
+      final dismissed = await getIt<AppPrefs>().onboardingDismissed();
+      if (mounted) setState(() => _showOnboarding = !dismissed);
+    } catch (_) {}
+  }
+
+  Future<void> _dismissOnboarding() async {
+    try {
+      if (getIt.isRegistered<AppPrefs>()) {
+        await getIt<AppPrefs>().setOnboardingDismissed(true);
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _showOnboarding = false);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final ctl = getIt<AppLocaleController>();
+    // 本次 build 只构造一份数据：既用于按分区渲染，也用于搜索过滤。
+    final sections = _sections(ctl);
+    final allEntries = <_Entry>[
+      ..._shortcuts(),
+      for (final s in sections)
+        for (final item in s.items)
+          if (item is _Entry) item,
+    ];
+    final searching = _query.isNotEmpty;
+
+    // 关键词为空时展示「原样完整列表」：原有 6 个分区 + 更多设置 + 页脚顺序不变，
+    // 只是前面多了搜索框 / 常用置顶 / 跨 Tab 引导卡，且不删任何入口。
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
-      children: const [
-        _Section('个人资料', [
-          _SettingsTile(
-            icon: Icons.person_outline,
-            title: '昵称 / 我的头像',
-            subtitle: '仅保存在本机',
-            page: ProfilePage(),
-          ),
-        ]),
-        _Section(
-          '通用',
-          [
-            _SettingsTile(
-              icon: Icons.tune,
-              title: '全局偏好',
-              subtitle: '主题 / 语气强度 / 自动朗读 / 默认模型',
-              page: GlobalPrefsPage(),
-            ),
-            _LanguageTile(),
-            _SettingsTile(
-              icon: Icons.notifications_none,
-              title: '通知',
-              subtitle: '角色问候 / 动态提醒 / 免打扰时段',
-              page: NotificationPage(),
-            ),
-          ],
-          caption: '这一层是「每天都会碰到」的偏好，改完立刻生效。',
-        ),
-        _Section(
-          '角色',
-          [
-            _SettingsTile(
-              icon: Icons.groups_outlined,
-              title: '角色管理',
-              subtitle: '新建 / 编辑资料 / 换头像背景 / 直达聊天',
-              page: CharacterManagerPage(),
-            ),
-          ],
-          caption: '想改某个角色？点进去是角色列表，不再是空表单。',
-        ),
-        _Section('模型与推理', [
-          _SettingsTile(
-            icon: Icons.memory_outlined,
-            title: '端侧模型',
-            subtitle: '设备体检 / 本机导入 / 下载 / 启用与试用',
-            page: ModelSetupPage(),
-          ),
-        ]),
-        _Section('记忆与生成', [
-          _SettingsTile(
-            icon: Icons.psychology_outlined,
-            title: '记忆管理',
-            subtitle: '重要记忆 / 聊天总结 / 关键词查询',
-            page: MemoryPage(),
-          ),
-          _SettingsTile(
-            icon: Icons.auto_awesome_outlined,
-            title: 'AI 生成',
-            subtitle: '提示词润色 / 图片视频 / 我的形象建模',
-            page: AiGenPage(),
-          ),
-          _SettingsTile(
-            icon: Icons.tune_outlined,
-            title: '3D 造型工坊',
-            subtitle: '照片取色 / 三种造型 / 五官与角度微调',
-            page: AvatarStudioPage(),
-          ),
-        ]),
-        _Section('数据与内容', [
-          _SettingsTile(
-            icon: Icons.backup_outlined,
-            title: '备份与恢复',
-            subtitle: '本地快照 / 自动备份 / 完整性校验',
-            page: BackupPage(),
-          ),
-          _SettingsTile(
-            icon: Icons.menu_book_outlined,
-            title: '话题库',
-            subtitle: '剧情向 / 日常向话题与可推进的剧情线',
-            page: TopicLibraryPage(),
-          ),
-        ]),
-        _MoreSettings(),
-        _Footer(),
+      children: [
+        if (_showOnboarding && !searching) _onboardingCard(context),
+        _searchField(context),
+        ...(searching
+            ? _searchResults(allEntries, _query)
+            : <Widget>[
+                _shortcutSection(context),
+                for (final s in sections) _buildSection(s),
+                const _MoreSettings(),
+                const _Footer(),
+              ]),
       ],
     );
   }
+
+  Widget _searchField(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: TextField(
+          controller: _searchCtl,
+          onChanged: (v) => setState(() => _query = v.trim()),
+          decoration: chInput(
+            context,
+            hint: '搜索设置',
+            suffix: const Icon(Icons.search_outlined),
+          ),
+        ),
+      );
+
+  /// 「常用」置顶区。刻意做成**一行紧凑 chips** 而不是三个 ListTile：
+  /// 设置页是懒构建 ListView，置顶区若占掉约 270px，会把第三分区的
+  /// 「角色管理」挤出首屏构建范围（viewport + cacheExtent），让老用户找不到入口。
+  /// 标题也用与正式入口不同的措辞：正式分区里的「角色管理 / 端侧模型」等文案
+  /// 被回归测试用 find.text 精确断言为唯一，置顶项复用同串会造成重复文本；
+  /// 关键词另存一份，保证搜索照样命中。
+  Widget _shortcutSection(BuildContext context) => _Section(
+        '常用',
+        [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final e in _shortcuts())
+                  ActionChip(
+                    avatar: Icon(e.icon, size: 16),
+                    label: Text(e.title, style: const TextStyle(fontSize: 12)),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(builder: (_) => e.page),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+        caption: '最高频的三个入口，点一下直达。',
+      );
+
+  Widget _buildSection(_SectionSpec s) => _Section(
+        s.title,
+        [
+          for (final item in s.items)
+            if (item is _Entry) item.buildTile() else item as Widget,
+        ],
+        caption: s.caption,
+      );
+
+  /// 搜索命中时把入口扁平成一个结果列表；置顶项也在 [all] 里，故同样可匹配。
+  List<Widget> _searchResults(List<_Entry> all, String q) {
+    final matched = all.where((e) => e.matches(q)).toList();
+    if (matched.isEmpty) {
+      return [
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 28),
+          child: Center(
+            child: Text('没有匹配的设置项',
+                style: TextStyle(color: Colors.grey, fontSize: 12.5)),
+          ),
+        ),
+      ];
+    }
+    return [
+      const SizedBox(height: 8),
+      Card(
+        child: Column(
+          children: [for (final e in matched) e.buildTile()],
+        ),
+      ),
+    ];
+  }
+
+  /// 「我的」Tab 的跨 Tab 首启引导卡：极简、可关闭、持久化。
+  /// 「去聊天」回到 AppShell 的第 0 个 Tab（聊天），「知道了」只关闭不再提示。
+  Widget _onboardingCard(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 10),
+      color: theme.colorScheme.primaryContainer.withValues(alpha: 0.24),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+            color: theme.colorScheme.primary.withValues(alpha: 0.18)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.waving_hand_outlined,
+                    size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('第一步在聊天页：点角色 → 写动作',
+                      style: TextStyle(fontSize: 12.5)),
+                ),
+              ],
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: _dismissOnboarding,
+                  child: const Text('知道了'),
+                ),
+                const SizedBox(width: 4),
+                FilledButton.tonal(
+                  onPressed: () {
+                    _dismissOnboarding();
+                    Navigator.of(context).pushNamed(AppRouter.home);
+                  },
+                  child: const Text('去聊天'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
+
+/// 一个可跳转、可按标题搜索的设置入口。
+/// [page] 复用现有页面，不新建任何页面；[keywords] 只参与搜索，不渲染成文本。
+class _Entry {
+  _Entry({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.page,
+    this.keywords = const <String>[],
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget page;
+  final List<String> keywords;
+
+  bool matches(String q) =>
+      title.contains(q) ||
+      subtitle.contains(q) ||
+      keywords.any((k) => k.contains(q));
+
+  Widget buildTile() => _SettingsTile(
+        icon: icon,
+        title: title,
+        subtitle: subtitle,
+        page: page,
+      );
+}
+
+/// 一个设置分区的数据描述：标题 + 可选说明 + 若干条目。
+/// [items] 里可以是 [_Entry]，也可以是无法搜索的特殊 Widget（如语言选择行）。
+class _SectionSpec {
+  _SectionSpec(this.title, this.items, {this.caption});
+
+  final String title;
+  final String? caption;
+  final List<Object> items;
+}
+
+/// 三个最高频入口（置顶）。标题避开正式分区里被精确断言的文案，
+/// 但关键词收录了「角色管理 / 模型与推理 / 数据备份」等，搜索照样能命中。
+List<_Entry> _shortcuts() => [
+      _Entry(
+        icon: Icons.groups_outlined,
+        title: '管理角色',
+        subtitle: '角色列表 / 编辑 / 开聊',
+        page: const CharacterManagerPage(),
+        keywords: const ['角色管理', '角色'],
+      ),
+      _Entry(
+        icon: Icons.memory_outlined,
+        title: '配置模型',
+        subtitle: '模型下载 / 启用 / 试用',
+        page: const ModelSetupPage(),
+        keywords: const ['模型与推理', '模型'],
+      ),
+      _Entry(
+        icon: Icons.backup_outlined,
+        title: '备份数据',
+        subtitle: '本地快照 / 恢复',
+        page: const BackupPage(),
+        keywords: const ['数据备份', '备份与恢复', '备份'],
+      ),
+    ];
+
+/// 首屏 6 个分区的数据。顺序、标题、说明与每个入口都和改造前的 ListView 一致，
+/// 只在「通用」分区末尾补了一行「通知记录」。
+List<_SectionSpec> _sections(AppLocaleController ctl) => [
+      _SectionSpec(ctl.tr('sec_profile'), [
+        _Entry(
+          icon: Icons.person_outline,
+          title: ctl.tr('t_profile'),
+          subtitle: ctl.tr('t_profile_sub'),
+          page: const ProfilePage(),
+        ),
+      ]),
+      _SectionSpec(
+        ctl.tr('sec_general'),
+        [
+          _Entry(
+            icon: Icons.tune,
+            title: ctl.tr('t_global_prefs'),
+            subtitle: ctl.tr('t_global_prefs_sub'),
+            page: const GlobalPrefsPage(),
+          ),
+          const _LanguageTile(),
+          _Entry(
+            icon: Icons.notifications_none,
+            title: ctl.tr('t_notification'),
+            subtitle: ctl.tr('t_notification_sub'),
+            page: const NotificationPage(),
+          ),
+          _Entry(
+            icon: Icons.history,
+            title: '通知记录',
+            subtitle: '最近发出的提醒历史',
+            page: const NotificationCenterPage(),
+          ),
+        ],
+        caption: ctl.tr('cap_general'),
+      ),
+      _SectionSpec(
+        ctl.tr('sec_character'),
+        [
+          _Entry(
+            icon: Icons.groups_outlined,
+            title: ctl.tr('t_character_mgr'),
+            subtitle: ctl.tr('t_character_mgr_sub'),
+            page: const CharacterManagerPage(),
+          ),
+          _Entry(
+            icon: Icons.pets_outlined,
+            title: ctl.tr('t_life_game'),
+            subtitle: ctl.tr('t_life_game_sub'),
+            page: const LifeGamePage(),
+          ),
+        ],
+        caption: ctl.tr('cap_character'),
+      ),
+      _SectionSpec(ctl.tr('sec_model'), [
+        _Entry(
+          icon: Icons.memory_outlined,
+          title: ctl.tr('t_model'),
+          subtitle: ctl.tr('t_model_sub'),
+          page: const ModelSetupPage(),
+        ),
+      ]),
+      _SectionSpec(ctl.tr('sec_memory'), [
+        _Entry(
+          icon: Icons.psychology_outlined,
+          title: ctl.tr('t_memory'),
+          subtitle: ctl.tr('t_memory_sub'),
+          page: const MemoryPage(),
+        ),
+        _Entry(
+          icon: Icons.auto_awesome_outlined,
+          title: ctl.tr('t_ai_gen'),
+          subtitle: ctl.tr('t_ai_gen_sub'),
+          page: const AiGenPage(),
+        ),
+        _Entry(
+          icon: Icons.tune_outlined,
+          title: ctl.tr('t_avatar_studio'),
+          subtitle: ctl.tr('t_avatar_studio_sub'),
+          page: const AvatarStudioPage(),
+        ),
+      ]),
+      _SectionSpec(ctl.tr('sec_data'), [
+        _Entry(
+          icon: Icons.backup_outlined,
+          title: ctl.tr('t_backup'),
+          subtitle: ctl.tr('t_backup_sub'),
+          page: const BackupPage(),
+        ),
+        _Entry(
+          icon: Icons.menu_book_outlined,
+          title: ctl.tr('t_topic_lib'),
+          subtitle: ctl.tr('t_topic_lib_sub'),
+          page: const TopicLibraryPage(),
+        ),
+      ]),
+    ];
 
 /// 一个设置分区：竖条小标题 + 卡片。
 class _Section extends StatelessWidget {
@@ -190,78 +467,85 @@ class _MoreSettings extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ctl = getIt<AppLocaleController>();
     final theme = Theme.of(context);
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Theme(
         // 去掉 ExpansionTile 展开时自带的上下分隔线，避免与卡片描边打架。
         data: theme.copyWith(dividerColor: Colors.transparent),
-        child: const ExpansionTile(
-          leading: Icon(Icons.tune),
-          title: Text('更多设置'),
-          subtitle: Text('世界模拟 / 桌面伴生 / 隐私 / 调试'),
-          shape: Border(),
-          collapsedShape: Border(),
-          tilePadding: EdgeInsets.symmetric(horizontal: 16),
-          childrenPadding: EdgeInsets.only(bottom: 8),
+        child: ExpansionTile(
+          leading: const Icon(Icons.tune),
+          title: Text(ctl.tr('sec_more')),
+          subtitle: Text(ctl.tr('more_subtitle')),
+          shape: const Border(),
+          collapsedShape: const Border(),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.only(bottom: 8),
           children: [
-            _GroupLabel('世界模拟'),
+            _GroupLabel(ctl.tr('group_world')),
             _SettingsTile(
               icon: Icons.public_outlined,
-              title: '世界与规则',
-              subtitle: '互动模式 / 双世界观 / 自运转事件 / 羁绊',
-              page: WorldRulesPage(),
+              title: ctl.tr('t_world_rules'),
+              subtitle: ctl.tr('t_world_rules_sub'),
+              page: const WorldRulesPage(),
             ),
             _SettingsTile(
               icon: Icons.book_outlined,
-              title: '角色私密日记',
-              subtitle: '角色视角日记 / 深层加密 / 退聊自动生成',
-              page: DiaryPage(),
+              title: ctl.tr('t_diary'),
+              subtitle: ctl.tr('t_diary_sub'),
+              page: const DiaryPage(),
             ),
             _SettingsTile(
               icon: Icons.lock_outline,
-              title: '档案锁',
-              subtitle: '角色独立加密锁 / 只读·完全 / 操作审计',
-              page: ProfileLockPage(),
+              title: ctl.tr('t_profile_lock'),
+              subtitle: ctl.tr('t_profile_lock_sub'),
+              page: const ProfileLockPage(),
             ),
             _SettingsTile(
               icon: Icons.edit_note_outlined,
-              title: '剧情高级编辑',
-              subtitle: '手动改写 / AI 润色 / 三版本对照',
-              page: PlotEditPage(),
+              title: ctl.tr('t_plot_edit'),
+              subtitle: ctl.tr('t_plot_edit_sub'),
+              page: const PlotEditPage(),
             ),
-            _GroupLabel('设备与隐私'),
+            _GroupLabel(ctl.tr('group_device')),
             _SettingsTile(
               icon: Icons.lock_outline,
-              title: '应用锁',
-              subtitle: '数字口令 / 指纹面容 / 切后台即锁 / 隐私空间',
-              page: AppLockPage(),
+              title: ctl.tr('t_app_lock'),
+              subtitle: ctl.tr('t_app_lock_sub'),
+              page: const AppLockPage(),
             ),
             _SettingsTile(
               icon: Icons.visibility_off_outlined,
-              title: '隐私空间',
-              subtitle: '把角色从所有列表里藏起来，验证后才可见',
-              page: PrivacySpacePage(),
+              title: ctl.tr('t_privacy_space'),
+              subtitle: ctl.tr('t_privacy_space_sub'),
+              page: const PrivacySpacePage(),
             ),
             _SettingsTile(
               icon: Icons.app_settings_alt_outlined,
-              title: '权限管理',
-              subtitle: '麦克风 / 相机 / 通知 / 悬浮窗的用途与状态',
-              page: PermissionsPage(),
+              title: ctl.tr('t_permissions'),
+              subtitle: ctl.tr('t_permissions_sub'),
+              page: const PermissionsPage(),
             ),
-            OverlayToggleTile(),
+            _SettingsTile(
+              icon: Icons.connect_without_contact_outlined,
+              title: ctl.tr('t_wechat_sync'),
+              subtitle: ctl.tr('t_wechat_sync_sub'),
+              page: const WeChatSyncSettingsPage(),
+            ),
+            const OverlayToggleTile(),
             _SettingsTile(
               icon: Icons.shield_outlined,
-              title: '隐私与数据',
-              subtitle: '内容边界 / 数据在哪 / 紧急清空',
-              page: PrivacyPage(),
+              title: ctl.tr('t_privacy'),
+              subtitle: ctl.tr('t_privacy_sub'),
+              page: const PrivacyPage(),
             ),
-            _GroupLabel('开发者'),
+            _GroupLabel(ctl.tr('group_dev')),
             _SettingsTile(
               icon: Icons.bug_report_outlined,
-              title: '人设自检（调试）',
-              subtitle: '验证角色是否守住人设、不 OOC',
-              page: PersonaSelfCheckPage(),
+              title: ctl.tr('t_selfcheck'),
+              subtitle: ctl.tr('t_selfcheck_sub'),
+              page: const PersonaSelfCheckPage(),
             ),
 
           ],
@@ -299,10 +583,11 @@ class _Footer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ctl = getIt<AppLocaleController>();
     return Padding(
       padding: const EdgeInsets.fromLTRB(2, 10, 2, 0),
       child: Text(
-        '数据只存在这台设备：不上传、不训练、不审查。',
+        ctl.tr('footer_privacy'),
         style: TextStyle(
           fontSize: 11,
           color: chQuiet(context).withValues(alpha: 0.65),
@@ -322,7 +607,7 @@ class _LanguageTile extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('界面语言', style: TextStyle(fontSize: 16)),
+        title: Text(ctl.tr('language'), style: const TextStyle(fontSize: 16)),
         content: RadioGroup<String>(
           groupValue: ctl.value,
           onChanged: (v) => Navigator.pop(ctx, v),
@@ -341,8 +626,7 @@ class _LanguageTile extends StatelessWidget {
                 ),
               const SizedBox(height: 6),
               Text(
-                '选择后立即生效。系统控件（复制 / 粘贴等）随语言切换；'
-                '页面文案当前为简体中文，将随版本逐步翻译。',
+                ctl.tr('language_note'),
                 style: TextStyle(
                   fontSize: 11,
                   color:
@@ -355,7 +639,7 @@ class _LanguageTile extends StatelessWidget {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消')),
+              child: Text(ctl.tr('cancel'))),
         ],
       ),
     );
@@ -369,7 +653,7 @@ class _LanguageTile extends StatelessWidget {
       valueListenable: ctl,
       builder: (_, value, _) => ListTile(
         leading: const Icon(Icons.translate_outlined),
-        title: const Text('语言 / Language'),
+        title: Text(ctl.tr('language')),
         subtitle: Text(ctl.label),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => _pick(context, ctl),
