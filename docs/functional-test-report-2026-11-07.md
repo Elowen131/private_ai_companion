@@ -117,3 +117,52 @@
 - 本轮发现并修复 **3 个真实功能缺陷**：撤回即遗忘失效（BUG-1）、`_refresh` 的 `setState` 返回 Future（BUG-2）、发布对话框 `TextEditingController` 释放时序（BUG-3）；其中 BUG-2/BUG-3 由新增的 `moments_page_test` 自动捕获（先红后绿）。
 - 体量/内存/流畅度/3D 建模质量：3D 渲染与光栅素材未改动（B1/B2 守稳）；原生 LLM 库体积在 GPU 后端排除基础上进一步收敛 ABI + 剔除 LiteRT CPU 核心（≈29.3MB，待真机验证），与历史结论一致。
 - 需求符合性：**66 项 ❌0 缺失**，四条硬约束全守，无伪装开关。
+
+---
+
+## 8. 2026-11-09 补录：截图路径修复与模拟器冒烟验收
+
+用户按真机截图路径指出四处问题，本轮修复并做端侧复验（本节为报告后的增补，基线见 `git log`）。
+
+### 8.1 修复项
+
+| 编号 | 问题 | 修复 | 回归 |
+|---|---|---|---|
+| #294 | 「宠物 · 孩子 · 家族」页红屏崩溃 | `life_game_page.dart`：`TabBar` / `TabBarView` 共用同一个 `_tab` controller，消除独立 DefaultTabController 造成的 controller 冲突 | `test/life_game_page_test.dart`（三个 Tab 切换） |
+| #295 | 聊天只见角色头像 | `MessageBubble` 新增 `charAvatar` / `userAvatar` / `charName` / `userName`，角色气泡左侧、用户气泡右侧同时出头像，缺图用姓名首字兜底；`ChatPage` 从 `UserRepository` 读本机头像与昵称 | `test/chat_avatar_and_state_test.dart`（气泡双头像） |
+| #296 | 角色状态藏得深、只显示少数项 | 消息列表上方常驻状态摘要条（点击展开），状态面板按「情绪 / 对你的关系 / 理智 / 场景与内心」展示八维真实落库数据：`心情 / 好感 / 爱意 / 愤怒 / 性欲 / 理智 / 地点 / 内心 OS` | 同上的源码契约 + 真机截图 |
+| #297 | 虚拟手机图标不可点、无日记 | `virtual_phone_service.dart` 按人设推导机型/主题/问候语/通知/App 组合；`virtual_phone_page.dart` 每个图标绑定 `onTap` 打开 `phone_app_detail_page.dart`；新增 `PhoneDiaryPage` 虚拟日记 + 「查看真实相处日记」入口 | `test/virtual_phone_service_test.dart`、`test/virtual_phone_page_test.dart` |
+
+### 8.2 真机冒烟新发现并修复的缺陷（widget 测试盲区）
+
+`ChatPage` 的 AppBar 里堆了 7 个 48dp `IconButton`。模拟器 `1080×2400 @420dpi` 只有 **411dp** 逻辑宽度：
+`7×48 + 56(leading) = 392dp`，`title` 被挤成 0 宽 —— 截图上顶部只有一排图标，
+「双方头像 + 角色名 + 状态入口」整块**不可见**。宽屏 widget 测试不会暴露这个布局挤压。
+
+修复：把次操作整体移到 `AppBar.bottom` 的独立一行（`PreferredSize` + 横向 `SingleChildScrollView`），
+`actions` 置空。标题恢复完整可见，7 个入口仍一键可达，窄屏可横向滚动。
+新增源码契约 `test/chat_avatar_and_state_test.dart` 锁定「AppBar 段必须含 `bottom: PreferredSize(` 且不得出现 `actions: [`」。
+
+一次 ANR 说明：首次点「我的」时系统弹 `isn't responding`，logcat 同时出现
+`system_server` 22s 慢派发 / 1418 跳帧，属宿主瞬时过载；`force-stop` 干净重启后
+同路径连续复验零 ANR、零 `Flutter exception`，非代码缺陷。
+
+### 8.3 验证链
+
+```text
+flutter analyze --fatal-infos            → No issues found!
+flutter test (全量)                      → 511 passed / 0 failed
+flutter build apk --debug --target-platform android-x64 → √ app-debug.apk
+adb install -r + 冷启动                  → Success，零 exception / 零 ANR
+```
+
+模拟器路径逐页复验（截图在 `build/smoke_*.png`，均被 `.gitignore` 忽略）：
+
+1. 我的 → 下滑 → 「宠物 · 孩子 · 家族」→ 宠物 / 孩子 / 家族 三个 Tab 均可打开，无红屏；
+2. 返回 → 最近对话「岑攸珩」→ 状态摘要条 → 八维面板数值与进度条正常；
+3. AppBar 第一行「岑 / 我」双头像 + 角色名可见，第二行 7 个入口一键可达（手机入口实测可打开）；
+4. 手机页 12 个 App 图标可点开详情，「日记」可进虚拟日记页；两次冷启动得到不同机型
+   （`Halo Mini` / `Mira Note`）与不同问候语，证明按人设随机生成生效。
+
+**诚实边界**：本次是 x86_64 debug APK 的模拟器 UI 冒烟，不含端侧真模型推理、
+release 包体 / 帧率 / 内存峰值；这些仍以 CI 与真机专项为准。

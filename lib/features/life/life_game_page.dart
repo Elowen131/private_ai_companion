@@ -55,8 +55,14 @@ class _LifeGamePageState extends State<LifeGamePage>
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
           title: const Text('宠物 · 孩子 · 家族'),
-          bottom: const TabBar(
-            tabs: [
+          // 必须与下面的 TabBarView 共用同一个 TabController：本页外层没有
+          // DefaultTabController，TabBar 若省略 controller 会抛
+          // "No TabController for TabBar"，框架清理时再触发
+          // InheritedElement.debugDeactivated 的 _dependents.isEmpty 断言，
+          // 整页直接红屏（真机实测）。
+          bottom: TabBar(
+            controller: _tab,
+            tabs: const [
               Tab(text: '宠物'),
               Tab(text: '孩子'),
               Tab(text: '家族'),

@@ -16,8 +16,22 @@ class MessageBubble extends StatelessWidget {
   final bool voicePlaying;
   final int voiceDurationMs;
 
+  /// 双方头像：聊天气泡旁同时出现「角色」与「用户」的头像。
+  /// 均为可选；未传时保持旧版纯气泡布局（群聊 / 既有单测不受影响）。
+  final ImageProvider? charAvatar;
+  final ImageProvider? userAvatar;
+  final String charName;
+  final String userName;
+
   /// 这条消息是不是语音。
   bool get _isVoice => message.mediaType == 'voice';
+
+  /// 调用方给了任一名字 / 头像即开启头像行。
+  bool get _showAvatars =>
+      charName.isNotEmpty ||
+      userName.isNotEmpty ||
+      charAvatar != null ||
+      userAvatar != null;
 
   const MessageBubble({
     super.key,
@@ -29,6 +43,10 @@ class MessageBubble extends StatelessWidget {
     this.onPlayVoice,
     this.voicePlaying = false,
     this.voiceDurationMs = 0,
+    this.charAvatar,
+    this.userAvatar,
+    this.charName = '',
+    this.userName = '',
   });
 
   @override
@@ -135,13 +153,49 @@ class MessageBubble extends StatelessWidget {
         onLongPressStart: (d) => onLongPress?.call(d.globalPosition),
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-          child: Column(
-            crossAxisAlignment:
-                mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: column,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!mine && _showAvatars) ...[
+                _avatarChip(context, charAvatar, charName, isChar: true),
+                const SizedBox(width: 6),
+              ],
+              Flexible(
+                child: Column(
+                  crossAxisAlignment:
+                      mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                  children: column,
+                ),
+              ),
+              if (mine && _showAvatars) ...[
+                const SizedBox(width: 6),
+                _avatarChip(context, userAvatar, userName, isChar: false),
+              ],
+            ],
           ),
         ),
       ),
+    );
+  }
+
+  /// 头像缺失时用姓名首字兜底；角色用主色、用户用次色，一眼分得清。
+  Widget _avatarChip(BuildContext context, ImageProvider? image, String name,
+      {required bool isChar}) {
+    final cs = Theme.of(context).colorScheme;
+    return CircleAvatar(
+      radius: 16,
+      backgroundColor:
+          isChar ? cs.primaryContainer : cs.secondaryContainer,
+      foregroundColor:
+          isChar ? cs.onPrimaryContainer : cs.onSecondaryContainer,
+      backgroundImage: image,
+      child: image == null
+          ? Text(
+              name.isEmpty ? (isChar ? 'C' : 'U') : name[0],
+              style: const TextStyle(fontSize: 12),
+            )
+          : null,
     );
   }
 

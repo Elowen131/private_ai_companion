@@ -24,6 +24,8 @@ import 'package:private_ai_companion/features/settings/persona_voice_page.dart';
 import 'package:private_ai_companion/features/chat/widgets/topic_sheet.dart';
 import 'package:private_ai_companion/data/repositories/message_repository.dart';
 import 'package:private_ai_companion/data/repositories/conversation_repository.dart';
+import 'package:private_ai_companion/data/repositories/user_repository.dart';
+import 'package:private_ai_companion/core/models/character_state.dart';
 import 'package:private_ai_companion/features/chat/widgets/appearance_sheet.dart';
 import 'package:private_ai_companion/features/chat/widgets/message_bubble.dart';
 import 'package:private_ai_companion/features/chat/widgets/quick_keys.dart';
@@ -196,6 +198,11 @@ class _ChatPageState extends State<ChatPage> {
   // 头像 / 背景仅在 _persona 确定后计算一次，避免在 build() 中反复做同步文件 IO。
   ImageProvider? _avatar;
   BoxDecoration? _bgDecoration;
+  /// 用户自己的头像 / 昵称：聊天页要「用户 + 角色」双方头像同时可见。
+  ImageProvider? _userAvatar;
+  String _userName = '我';
+  /// 角色八维状态（供消息列表上方的状态摘要条展示）。
+  CharacterState? _charState;
   bool _generating = false;
   String _streamingText = ''; // 打字机中的 AI 回复
   /// 打字机文本的变更通知。流式生成每个 token 只通知这一个值，
@@ -274,6 +281,105 @@ class _ChatPageState extends State<ChatPage> {
           );
   }
 
+  /// 载入本地用户头像 / 昵称。资料页可能还没写过用户行，缺数据时用「我」兜底；
+  /// 轻量测试环境若不注册 UserRepository 也不能让聊天页崩。
+  Future<void> _applyUserVisuals() async {
+    if (!getIt.isRegistered<UserRepository>()) return;
+    try {
+      final u = await getIt<UserRepository>().get(AppConstants.localUserId);
+      final nick = u?.nickname.trim() ?? '';
+      _userName = nick.isEmpty ? '我' : nick;
+      _userAvatar = PersonaMedia.provider(u?.avatarPath,
+          cacheWidth: 96, cacheHeight: 96);
+    } catch (_) {
+      _userName = '我';
+      _userAvatar = null;
+    }
+  }
+
+  Future<void> _loadCharState() async {
+    try {
+      _charState = await _stateEngine.get(widget.personaId);
+    } catch (_) {
+      _charState = null;
+    }
+  }
+
+  /// 顶部 / 气泡用的头像：缺图时用姓名首字，角色主色、用户次色。
+  Widget _headerAvatar(BuildContext context, ImageProvider? image, String name,
+      {required bool isChar, double radius = 14}) {
+    final cs = Theme.of(context).colorScheme;
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: isChar ? cs.primaryContainer : cs.secondaryContainer,
+      foregroundColor: isChar ? cs.onPrimaryContainer : cs.onSecondaryContainer,
+      backgroundImage: image,
+      child: image == null
+          ? Text(name.isEmpty ? (isChar ? '角' : '我') : name[0],
+              style: TextStyle(fontSize: radius * 0.72))
+          : null,
+    );
+  }
+
+  /// 消息列表上方的状态摘要条：进聊天页就能看到角色的多项状态，
+  /// 不用去猜「点头像能看状态」这个隐藏交互；点一下展开完整八维面板。
+  Widget _stateStrip(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final s = _charState;
+    final name = _persona?.name ?? '角色';
+    final summary = s == null
+        ? '$name 的状态 · 点击查看心情 / 好感 / 地点 / 内心 OS'
+        : '$name · 心情 ${s.mood.toInt()} · 好感 ${s.favor.toInt()} · '
+            '爱意 ${s.love.toInt()} · 愤怒 ${s.anger.toInt()} · '
+            '${s.location.isEmpty ? '地点未定' : s.location}';
+    return InkWell(
+      key: const ValueKey('chat_state_strip'),
+      onTap: _showStatePanel,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.7),
+        child: Row(children: [
+          Icon(Icons.insights_outlined, size: 16, color: cs.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(summary,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
+          ),
+          Icon(Icons.chevron_right, size: 16, color: cs.onSurfaceVariant),
+        ]),
+      ),
+    );
+  }
+
+  Widget _stateInfoCard(
+      BuildContext ctx, String title, String value, IconData icon) {
+    final cs = Theme.of(ctx).colorScheme;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, size: 18, color: cs.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                const SizedBox(height: 3),
+                Text(value, style: const TextStyle(fontSize: 13.5, height: 1.5)),
+              ],
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
   /// 聊天页直达「聊天外观」：改头像 / 背景后同屏立即生效，无需退回列表重进。
   Future<void> _showAppearance() async {
     final p = _persona;
@@ -311,6 +417,8 @@ class _ChatPageState extends State<ChatPage> {
       _messages = await _loadMessages(_activeConversationId!);
     }
     _applyVisuals();
+    await _applyUserVisuals();
+    await _loadCharState();
     if (mounted) setState(() {});
   }
 
@@ -657,6 +765,8 @@ class _ChatPageState extends State<ChatPage> {
     // 角色头像 / 背景可能在别的入口被改，刷新时一并重算。
     _persona = await _personaService.get(widget.personaId);
     _applyVisuals();
+    await _applyUserVisuals();
+    await _loadCharState();
     if (mounted) setState(() {});
   }
 
@@ -741,65 +851,110 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  /// 角色状态面板（点击头像，方案 4.2）。
+  /// 角色状态面板（点头像 / 标题 / 状态条都能进，方案 4.2）。
+  ///
+  /// 八项状态按「情绪 / 对你的关系 / 理智 / 场景与内心」分组展示，
+  /// 全部取自 [StateEngine] 的真实落库数据，不做假数值。
   Future<void> _showStatePanel() async {
     final s = await _stateEngine.get(widget.personaId);
     if (!mounted) return;
+    setState(() => _charState = s); // 同步顶部状态摘要条
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('${_persona?.name ?? ''}${_l10n.tr('state_status')}',
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-              _bar(_l10n.tr('bar_mood'), s.mood),
-              _bar(_l10n.tr('bar_favor'), s.favor),
-              _bar(_l10n.tr('bar_love'), s.love),
-              _bar(_l10n.tr('bar_anger'), s.anger),
-              _bar(_l10n.tr('bar_lust'), s.lust),
-              _bar(_l10n.tr('bar_reason'), s.reason),
-              const SizedBox(height: 8),
-              Text('${_l10n.tr('state_inner_os')}${s.innerOs.isEmpty ? _l10n.tr('empty_hint') : s.innerOs}'),
-              Text('${_l10n.tr('state_location')}${s.location.isEmpty ? _l10n.tr('empty_hint') : s.location}'),
-              const SizedBox(height: 16),
-              const Divider(height: 1),
-              const SizedBox(height: 12),
-              // 这些能力原先只藏在「设置 → 世界模拟」里，用户在聊天中根本不会去翻。
-              // 放在角色面板里，是「我在跟这个角色相处」时最自然的入口。
-              Text(
-                _l10n.tr('panel_for_char'),
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        Widget section(String t) => Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 2),
+              child: Text(t,
+                  style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: cs.primary)),
+            );
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  _headerAvatar(ctx, _avatar, _persona?.name ?? '角色',
+                      isChar: true, radius: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                            '${_persona?.name ?? ''}${_l10n.tr('state_status')}',
+                            style: const TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.bold)),
+                        Text('心情 / 好感 / 爱意 / 愤怒 / 性欲 / 理智 / 地点 / 内心 OS',
+                            style: TextStyle(
+                                fontSize: 10.5, color: cs.onSurfaceVariant)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 20),
+                    tooltip: '刷新状态',
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      _showStatePanel();
+                    },
+                  ),
+                ]),
+                section('情绪'),
+                _bar(_l10n.tr('bar_mood'), s.mood),
+                _bar(_l10n.tr('bar_anger'), s.anger),
+                section('对你的关系'),
+                _bar(_l10n.tr('bar_favor'), s.favor),
+                _bar(_l10n.tr('bar_love'), s.love),
+                _bar(_l10n.tr('bar_lust'), s.lust),
+                section('理智'),
+                _bar(_l10n.tr('bar_reason'), s.reason),
+                const SizedBox(height: 12),
+                _stateInfoCard(
+                    ctx,
+                    '当前剧情地点',
+                    s.location.isEmpty ? _l10n.tr('empty_hint') : s.location,
+                    Icons.place_outlined),
+                _stateInfoCard(
+                    ctx,
+                    '内心 OS',
+                    s.innerOs.isEmpty ? _l10n.tr('empty_hint') : s.innerOs,
+                    Icons.psychology_outlined),
+                const SizedBox(height: 8),
+                const Divider(height: 1),
+                const SizedBox(height: 12),
+                // 这些能力原先只藏在「设置 → 世界模拟」里，用户在聊天中根本不会去翻。
+                Text(
+                  _l10n.tr('panel_for_char'),
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurfaceVariant,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  // 每项仍是 Expanded（等宽自适应）：追加第 6 项「记忆」后
-                  // 6 等分列宽、文字过长时自动换行，窄屏也不会 RenderFlex overflow。
-                  // 清单来自顶层纯函数，便于 test/chat_memory_shortcut_test.dart 断言。
-                  for (final a in chatPanelActions(
-                    personaId: widget.personaId,
-                    persona: _persona,
-                    tr: _l10n.tr,
-                  ))
-                    _panelAction(ctx, a.icon, a.label, a.builder),
-                ],
-              ),
-            ],
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    for (final a in chatPanelActions(
+                      personaId: widget.personaId,
+                      persona: _persona,
+                      tr: _l10n.tr,
+                    ))
+                      _panelAction(ctx, a.icon, a.label, a.builder),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -938,78 +1093,102 @@ class _ChatPageState extends State<ChatPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        // 显式给标题一个高对比底色：真机浅色主题下曾用白字压白底，
+        // 角色名几乎看不见，也就没人发现这里能点头像看状态。
         title: GestureDetector(
           onTap: _showStatePanel,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircleAvatar(
-                radius: 14,
-                backgroundImage: _avatar,
-                child: _avatar == null
-                    ? Text(_persona?.name.isNotEmpty == true
-                        ? _persona!.name[0]
-                        : '?')
-                    : null,
-              ), // 点头像看状态
-              const SizedBox(width: 8),
-              // 点头像/名字打开角色面板（状态 + 对这个角色的操作）。
-              // 补一个小箭头，否则没人知道标题可点。
-              Text(_persona?.name ?? _l10n.tr('chat_default_title')),
-              Icon(
-                Icons.expand_more,
-                size: 16,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ],
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 用户 + 角色头像同时出现（截图实测诉求）。
+                _headerAvatar(context, _avatar, _persona?.name ?? '角色',
+                    isChar: true),
+                const SizedBox(width: 2),
+                _headerAvatar(context, _userAvatar, _userName, isChar: false),
+                const SizedBox(width: 8),
+                Text(
+                  _persona?.name ?? _l10n.tr('chat_default_title'),
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.onSurface),
+                ),
+                Icon(Icons.expand_more,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ],
+            ),
           ),
         ),
-        actions: [
-          if (_hasOlderMessages)
-            IconButton(
-              icon: _loadingOlder
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.history_outlined),
-              tooltip: '再加载 $_initialPageSize 条更早消息'
-                  '（当前显示最近 $_visibleLimit 条）',
-              onPressed: _loadingOlder ? null : _loadOlder,
+        // 真机 1080×2400 @420dpi 只有 411dp 宽：7 个 48dp 的 IconButton
+        // 会把 title 挤成 0 宽，「双方头像 + 角色名」整块看不见（widget 测试
+        // 用宽屏测不出来）。把次操作整体下移到独立一行：标题完整可见，
+        // 所有入口仍然一键可达，极窄屏可横向滚动。
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: SizedBox(
+            height: 48,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_hasOlderMessages)
+                    IconButton(
+                      icon: _loadingOlder
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.history_outlined),
+                      tooltip: '再加载 $_initialPageSize 条更早消息'
+                          '（当前显示最近 $_visibleLimit 条）',
+                      onPressed: _loadingOlder ? null : _loadOlder,
+                    ),
+                  IconButton(
+                      icon: const Icon(Icons.palette_outlined),
+                      onPressed: _showAppearance,
+                      tooltip: _l10n.tr('tt_appearance')),
+                  IconButton(
+                      icon: const Icon(Icons.lightbulb_outline),
+                      onPressed: _showPlotHint,
+                      tooltip: _l10n.tr('tt_plot_hint')),
+                  IconButton(
+                      icon: const Icon(Icons.auto_awesome),
+                      onPressed: _showSuggestions,
+                      tooltip: _l10n.tr('tt_ai_tips')),
+                  IconButton(
+                      icon: const Icon(Icons.card_giftcard_outlined),
+                      onPressed: _sendGift,
+                      tooltip: _l10n.tr('tt_gift')),
+                  IconButton(
+                      icon: const Icon(Icons.smartphone_outlined),
+                      onPressed: _openVirtualPhone,
+                      tooltip: _l10n.tr('tt_phone')),
+                  IconButton(
+                      icon: const Icon(Icons.videocam_outlined),
+                      onPressed: _openVideoChat,
+                      tooltip: _l10n.tr('tt_video')),
+                  IconButton(
+                      icon: const Icon(Icons.share_outlined),
+                      onPressed: _shareConversation,
+                      tooltip: _l10n.tr('tt_share')),
+                ],
+              ),
             ),
-          IconButton(
-              icon: const Icon(Icons.palette_outlined),
-              onPressed: _showAppearance,
-              tooltip: _l10n.tr('tt_appearance')),
-          IconButton(
-              icon: const Icon(Icons.lightbulb_outline),
-              onPressed: _showPlotHint,
-              tooltip: _l10n.tr('tt_plot_hint')),
-          IconButton(
-              icon: const Icon(Icons.auto_awesome),
-              onPressed: _showSuggestions,
-              tooltip: _l10n.tr('tt_ai_tips')),
-          IconButton(
-              icon: const Icon(Icons.card_giftcard_outlined),
-              onPressed: _sendGift,
-              tooltip: _l10n.tr('tt_gift')),
-          IconButton(
-              icon: const Icon(Icons.smartphone_outlined),
-              onPressed: _openVirtualPhone,
-              tooltip: _l10n.tr('tt_phone')),
-          IconButton(
-              icon: const Icon(Icons.videocam_outlined),
-              onPressed: _openVideoChat,
-              tooltip: _l10n.tr('tt_video')),
-          IconButton(
-              icon: const Icon(Icons.share_outlined),
-              onPressed: _shareConversation,
-              tooltip: _l10n.tr('tt_share')),
-        ],
+          ),
+        ),
       ),
       body: Column(
         children: [
+          _stateStrip(context),
           Expanded(
             child: Container(
               decoration: _bgDecoration,
@@ -1021,21 +1200,36 @@ class _ChatPageState extends State<ChatPage> {
                   // 打字机气泡
                   return Align(
                     alignment: Alignment.centerLeft,
-                    child: Container(
-                      margin: const EdgeInsets.all(12),
+                    child: Padding(
                       padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color:
-                            Theme.of(context).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: ValueListenableBuilder<int>(
-                        valueListenable: _streamVersion,
-                        builder: (_, _, _) => Text(
-                          _streamingText.isEmpty
-                              ? _l10n.tr('typing')
-                              : _streamingText,
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _headerAvatar(
+                              context, _avatar, _persona?.name ?? '角色',
+                              isChar: true, radius: 16),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: ValueListenableBuilder<int>(
+                                valueListenable: _streamVersion,
+                                builder: (_, _, _) => Text(
+                                  _streamingText.isEmpty
+                                      ? _l10n.tr('typing')
+                                      : _streamingText,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   );
@@ -1051,6 +1245,10 @@ class _ChatPageState extends State<ChatPage> {
                   voicePlaying:
                       m.mediaPath != null && _voice.playingPath == m.mediaPath,
                   voiceDurationMs: m.durationMs,
+                  charAvatar: _avatar,
+                  userAvatar: _userAvatar,
+                  charName: _persona?.name ?? '角色',
+                  userName: _userName,
                 );
               },
               ),

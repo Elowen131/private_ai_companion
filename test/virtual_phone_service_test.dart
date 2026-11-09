@@ -72,5 +72,63 @@ void main() {
         identity: '', likes: '', world: '', personality: ''));
       expect(phone.apps.length, greaterThanOrEqualTo(4));
     });
+
+    test('用户创建的每个角色手机都不一样（指纹两两不同）', () {
+      final personas = [
+        samplePersona(name: '甲', identity: '学生', likes: '音乐,星空',
+            world: '奇幻', personality: '温柔'),
+        samplePersona(name: '乙', identity: '职场', likes: '咖啡,跑步',
+            world: '赛博', personality: '冷静'),
+        samplePersona(name: '丙', identity: '画家', likes: '绘画,猫',
+            world: '写实', personality: '活泼'),
+        samplePersona(name: '丁', identity: '医生', likes: '书,茶',
+            world: '写实', personality: '安静'),
+        samplePersona(name: '戊', identity: '学生', likes: '游戏,奶茶',
+            world: '奇幻', personality: '元气'),
+      ];
+      final signatures =
+          personas.map((p) => service.generate(p).signature).toSet();
+      expect(signatures.length, personas.length,
+          reason: '不同人设不能生成同一台手机');
+      // 桌面组合至少要有两种，不能所有角色都是同一套图标。
+      expect(
+          personas
+              .map((p) => service
+                  .generate(p)
+                  .apps
+                  .map((a) => a.name)
+                  .join('|'))
+              .toSet()
+              .length,
+          greaterThan(1));
+    });
+
+    test('同一 id 但人设不同，也不会撞出同一台手机', () {
+      final a = service.generate(samplePersona(
+          name: '同名', likes: '音乐', personality: '温柔'));
+      final b = service.generate(samplePersona(
+          name: '同名', likes: '跑步', personality: '冷静'));
+      expect(a.signature, isNot(equals(b.signature)));
+    });
+
+    test('日记 App 必定存在；日记与每个 App 的详情都非空', () {
+      final phone = service.generate(samplePersona());
+      final names = phone.apps.map((a) => a.name).toList();
+      expect(names, contains('日记'));
+      expect(phone.diary, isNotEmpty);
+      for (final e in phone.diary) {
+        expect(e.date, isNotEmpty);
+        expect(e.title, isNotEmpty);
+        expect(e.content, isNotEmpty);
+        expect(e.mood, isNotEmpty);
+      }
+      for (final a in phone.apps) {
+        expect(a.detailLines, isNotEmpty,
+            reason: '${a.name} 图标点开后必须有内容');
+        expect(a.detailTitle, isNotEmpty);
+      }
+      expect(phone.greeting, isNotEmpty);
+      expect(phone.deviceLabel, isNotEmpty);
+    });
   });
 }
