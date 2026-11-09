@@ -56,6 +56,7 @@ const Map<String, Map<String, String>> kStrings = {
     'privacy': '隐私',
     'appearance': '外观',
     // —— 设置中心（#230）——
+    'sec_general': '通用设置',
     'sec_profile': '个人资料',
     'sec_character': '角色',
     'sec_model': '模型与推理',
@@ -266,6 +267,7 @@ const Map<String, Map<String, String>> kStrings = {
     'privacy': '隱私',
     'appearance': '外觀',
     // —— 設定中心（#230）——
+    'sec_general': '一般設定',
     'sec_profile': '個人資料',
     'sec_character': '角色',
     'sec_model': '模型與推理',
@@ -476,6 +478,7 @@ const Map<String, Map<String, String>> kStrings = {
     'privacy': 'Privacy',
     'appearance': 'Appearance',
     // —— Settings center (#230）——
+    'sec_general': 'General Settings',
     'sec_profile': 'Profile',
     'sec_character': 'Characters',
     'sec_model': 'Model & Inference',
@@ -698,6 +701,7 @@ const Map<String, Map<String, String>> kStrings = {
     'privacy': 'プライバシー',
     'appearance': '外観',
     // —— 設定センター（#230）——
+    'sec_general': '一般設定',
     'sec_profile': 'プロフィール',
     'sec_character': 'キャラクター',
     'sec_model': 'モデルと推論',
@@ -918,6 +922,7 @@ const Map<String, Map<String, String>> kStrings = {
     'privacy': '개인정보',
     'appearance': '모양',
     // —— 설정 센터（#230）——
+    'sec_general': '일반 설정',
     'sec_profile': '프로필',
     'sec_character': '캐릭터',
     'sec_model': '모델 및 추론',

@@ -137,6 +137,12 @@ Future<void> setupDependencies() async {
   getIt.registerSingleton<PregnancyRepository>(PregnancyRepository(db));
 
   // ---------- 第 21 章延伸：宠物 / 孩子 / 家族 gameplay ----------
+  // WorldClock 必须先于 ChildService 注册：ChildService 构造时就取用 WorldClock，
+  // 而下面「核心引擎 / 时序」分区才轮到原注册点。曾因倒置导致真机启动直接抛
+  // GetIt "WorldClock is not registered"（widget 测试各自装配依赖，覆盖不到）。
+  // 注册顺序由 test/di_registration_order_test.dart 守护。
+  getIt.registerSingleton<WorldClock>(WorldClock(db));
+
   // FamilyService 必须先于 PetService 注册：PetService.breed 需要把子代与双亲
   // 登记进家族树，构造时即依赖 FamilyService 实例。
   getIt.registerSingleton<FamilyService>(
@@ -217,7 +223,7 @@ Future<void> setupDependencies() async {
 
   // ---------- 第 21 章：双世界观 / 三模式 / 时序 / 档案锁 / 日记 / 剧情 / 羁绊 / 事件 ----------
   getIt.registerSingleton<WorldRulesService>(WorldRulesService(getIt()));
-  getIt.registerSingleton<WorldClock>(WorldClock(getIt()));
+  // WorldClock 已在数据层之后提前注册（ChildService 依赖它），此处不再重复注册。
   getIt.registerSingleton<WorldEventService>(WorldEventService(getIt<WorldEventRepository>(), uuid));
   getIt.registerSingleton<AgeService>(AgeService(getIt(), getIt(), getIt(), uuid));
   getIt.registerSingleton<ProfileLockService>(ProfileLockService(getIt(), uuid));

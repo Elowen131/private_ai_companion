@@ -1,5 +1,7 @@
 // 多语言机制契约：覆盖「多种」语言、键完整度、缺失回退、脏值归一。
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:private_ai_companion/core/i18n/app_locale.dart';
@@ -45,6 +47,28 @@ void main() {
         expect(map[k]!.trim(), isNotEmpty, reason: '$lang/$k 为空');
       }
     }
+  });
+
+  test('页面里所有 tr(key) 都在源语言表中，不会把原始 key 露到 UI', () {
+    // #221 模拟机实测：设置页曾把未登记的 'sec_general' 原样显示成分区标题。
+    // 页面文案必须「先加键、再用 tr」，这里做全库源码契约校验。
+    final used = <String>{};
+    for (final entity in Directory('lib').listSync(recursive: true)) {
+      if (entity is! File || !entity.path.endsWith('.dart')) continue;
+      // 去掉整行注释，避免把文档里的 `tr('key')` 示例当成真实调用。
+      final code = entity
+          .readAsStringSync()
+          .split('\n')
+          .where((line) => !line.trimLeft().startsWith('//'))
+          .join('\n');
+      for (final m
+          in RegExp(r"\btr\('([a-zA-Z0-9_]+)'\)").allMatches(code)) {
+        used.add(m.group(1)!);
+      }
+    }
+    expect(used.length, greaterThan(100), reason: '源码扫描不应空跑');
+    final missing = used.difference(kStrings['zh']!.keys.toSet());
+    expect(missing, isEmpty, reason: '这些 key 会原样显示在界面：$missing');
   });
 
   test('缺失翻译回退到简体中文，绝不空白', () {
