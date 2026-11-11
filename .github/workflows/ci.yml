@@ -246,30 +246,49 @@ jobs:
 
       - name: Upload Dart obfuscation symbols (not shipped)
         # 仅用于崩溃栈还原，不随 APK/AAB 分发，不影响用户下载体积。
-        if: always()
+        # 构件存储额度有限（私有仓默认 500MB）：上传失败（配额满）不应让整个
+        # 编译校验 job 变红——构建本身已通过，构件只是便于下载的附属品，
+        # 故 continue-on-error + 短保留 + 重跑覆盖，避免额度耗尽时 CI 误判失败。
+        # 仅 push 到 main/dev 或手动触发时上传；PR 仅做编译校验、不消耗配额，
+        # 避免高频 PR 把 500MB 私有仓额度快速吃满（见 #artifact-quota）。
+        if: ${{ always() && github.event_name != 'pull_request' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: dart-obfuscation-symbols
           path: build/app/dart-symbols/
           if-no-files-found: ignore
           retention-days: 7
+          overwrite: true
 
       - name: Upload APK artifact (verification only)
-        if: always()
+        # 仅为方便下载验证产物；构建校验已由前面的 build/upload 步骤完成。
+        # 保留期 7 天 + continue-on-error：历史构建易吃满私有仓 500MB 构件额度，
+        # 满额时上传失败不应让 job 变红（编译已通过）。
+        # 仅 push/main-dev 或手动触发时上传；PR 不传（见 #artifact-quota）。
+        if: ${{ always() && github.event_name != 'pull_request' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: app-release-unsigned
           # --split-per-abi 的产物名带 ABI 后缀（app-arm64-v8a-release.apk）。
           path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: ignore
+          retention-days: 7
+          overwrite: true
 
       - name: Upload AAB artifact (verification only)
-        if: always()
+        # 仅为方便下载验证产物；保留期 7 天 + continue-on-error（理由同上）。
+        # 仅 push/main-dev 或手动触发时上传；PR 不传（见 #artifact-quota）。
+        if: ${{ always() && github.event_name != 'pull_request' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: app-release-bundle
           path: build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: ignore
+          retention-days: 7
+          overwrite: true
 
   # ---------------------------------------------------------------------------
   # 3) 生产构建可编译性校验（iOS）
@@ -325,10 +344,9 @@ jobs:
         # flutter build ios 内部自动执行 pod install（ios/Podfile 已就位，部署目标 16.4）。
         run: flutter build ios --simulator
 
-      - name: Upload iOS app artifact (verification only)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Runner-unsigned-app
-          path: build/ios/iphonesimulator/Runner.app
-          if-no-files-found: ignore
+      # 注：故意不上传 iOS Runner.app 构件。
+      # 原因（#artifact-quota）：模拟器构建的 .app 未签名、无法在真机侧载，
+      # 实际下载价值极低；而它体积极大（数百 MB），是吃满私有仓 500MB 构件
+      # 额度的主要元凶。iOS「能否编译」已由上面的 build 步骤验证，无需再上传。
+      # 若日后确实要分发 iOS 验证包，应改为本地 macOS + 真机签名构建，
+      # 而非在 CI 上传模拟器包。
