@@ -17,6 +17,12 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
+  # 高精 3D 查看器：基于 Google model-viewer（WebView）渲染远程 GLB/glTF。
+  # 仅用于「放开红线做真高精 3D」试点；远程 URL 必须 https + CORS，
+  # 加载失败/超时自动回落到程序化 Avatar3DView。因只用 https，不启用
+  # cleartextTraffic，保持安全姿态（见 AndroidManifest 注释）。
+  flutter_3d_controller: ^2.3.0
+
   # 依赖注入（轻量、无代码生成）
   get_it: ^9.0.0
 

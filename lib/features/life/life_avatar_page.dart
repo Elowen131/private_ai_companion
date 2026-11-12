@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_model.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_view.dart';
 import 'package:private_ai_companion/core/avatar3d/creature_builder.dart';
+import 'package:private_ai_companion/core/avatar3d/glb_pet_viewer.dart';
+import 'package:private_ai_companion/core/avatar3d/pet_glb_manifest.dart';
 import 'package:private_ai_companion/core/life/life_avatar_service.dart';
 import 'package:private_ai_companion/core/life/life_scope.dart';
 import 'package:private_ai_companion/core/life/life_world_service.dart';
@@ -48,6 +50,11 @@ class _LifeAvatarPageState extends State<LifeAvatarPage> {
   bool _busy = true;
   String? _error;
 
+  /// 高精 GLB 资产条目（按宠物 species 反查）；null = 无高精资产，走程序化。
+  PetGlbEntry? _glb;
+  /// true = 优先展示高精 GLB；false = 程序化 [Avatar3DView]。
+  bool _useGlb = false;
+
   bool get _fantasy =>
       widget.pet?.worldview == 'fantasy' || widget.child?.worldview == 'fantasy';
 
@@ -84,6 +91,10 @@ class _LifeAvatarPageState extends State<LifeAvatarPage> {
         ...?active?.tuning,
       };
       _rebuild();
+      _glb = widget.pet != null
+          ? PetGlbManifest.forSpeciesName(widget.pet!.species)
+          : null;
+      _useGlb = _glb != null && PetGlbManifest.pilotEnabled;
       if (mounted) setState(() => _busy = false);
     } catch (e) {
       if (mounted) {
@@ -121,6 +132,51 @@ class _LifeAvatarPageState extends State<LifeAvatarPage> {
               );
     _spec = spec;
     _mesh = buildCreatureAvatar(spec);
+  }
+
+  /// 高精 GLB 加载失败 / 超时后由 [GlbPetViewer] 回调，回落到程序化模型。
+  void _fallbackToProcedural() {
+    if (!mounted) return;
+    setState(() => _useGlb = false);
+  }
+
+  /// 形象展示区：有高精资产且开关打开时优先 GLB，否则程序化网格。
+  Widget _viewerArea(CreatureSpec spec, AvatarMesh mesh) {
+    final showGlb = _useGlb && _glb != null;
+    return Column(
+      children: [
+        SizedBox(
+          height: 260,
+          child: showGlb
+              ? GlbPetViewer(
+                  src: _glb!.src,
+                  autoRotate: _glb!.autoRotate,
+                  cameraTheta: _glb!.cameraTheta,
+                  cameraPhi: _glb!.cameraPhi,
+                  cameraRadius: _glb!.cameraRadius,
+                  onFallback: _fallbackToProcedural,
+                )
+              : Avatar3DView(
+                  mesh: mesh,
+                  spec: LifeAvatarService.visualSpecFor(spec),
+                  mood: 'happy',
+                  animate: true,
+                  autoRotate: true,
+                  atmosphere: true,
+                ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Text(
+            showGlb
+                ? '高精 GLB 模型（远程加载 · ${_glb!.speciesId}）'
+                : '${mesh.triangleCount} 三角形 · ${mesh.boneCount} 骨骼 · '
+                    '${mesh.partTags.length} 个部件 · $_stage',
+            style: const TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+        ),
+      ],
+    );
   }
 
   Future<void> _save({bool random = false}) async {
@@ -164,7 +220,17 @@ class _LifeAvatarPageState extends State<LifeAvatarPage> {
     final spec = _spec;
     final mesh = _mesh;
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.displayName} · 3D 形象')),
+      appBar: AppBar(
+        title: Text('${widget.displayName} · 3D 形象'),
+        actions: [
+          if (_glb != null)
+            TextButton(
+              key: const ValueKey('avatar_toggle_precision'),
+              onPressed: () => setState(() => _useGlb = !_useGlb),
+              child: Text(_useGlb ? '风格化' : '高精'),
+            ),
+        ],
+      ),
       body: _busy
           ? const Center(child: CircularProgressIndicator())
           : _error != null
@@ -173,25 +239,7 @@ class _LifeAvatarPageState extends State<LifeAvatarPage> {
                   ? const Center(child: Text('无法生成形象数据'))
                   : Column(
                       children: [
-                        SizedBox(
-                          height: 260,
-                          child: Avatar3DView(
-                            mesh: mesh,
-                            spec: LifeAvatarService.visualSpecFor(spec),
-                            mood: 'happy',
-                            animate: true,
-                            autoRotate: true,
-                            atmosphere: true,
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Text(
-                            '${mesh.triangleCount} 三角形 · ${mesh.boneCount} 骨骼 · '
-                            '${mesh.partTags.length} 个部件 · $_stage',
-                            style: const TextStyle(fontSize: 11, color: Colors.grey),
-                          ),
-                        ),
+                        _viewerArea(spec, mesh),
                         const Divider(height: 12),
                         Expanded(
                           child: ListView(

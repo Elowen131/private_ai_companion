@@ -7,6 +7,11 @@
 >
 > 本次新增内容：**点击部位几何高亮**（#142）、**照片配色服饰推断**（#145）、
 > 以及本文件与 `test/avatar_highlight_and_outfit_test.dart`。
+>
+> 另增：**宠物高精 3D（远程 GLB）管线**（#307–#311）：`flutter_3d_controller`
+> （Google model-viewer WebView）在运行时加载远程 GLB，加载失败/超时自动回落
+> 到程序化 `Avatar3DView`；新增 `pet_glb_manifest.dart` / `glb_pet_viewer.dart`、
+> `pet_catalog.speciesIdByName`、接入 `life_avatar_page.dart`，依赖 `flutter_3d_controller`。
 
 ---
 
@@ -432,3 +437,75 @@ quality job 每次全量测试执行。若要调整视觉方向，先改渲染/�
 发丝仍是连续曲面而非逐根几何，布料是程序化织纹而非真实贴图，手脚仍偏圆润，
 光照没有真实环境反射与软阴影贴图。若必须逐像素贴近 31MB GLB，需要放宽包体
 红线并引入 GPU/PBR 渲染器，那会牺牲参数化生成、换装与骨骼动画（本轮未采用）。
+
+---
+
+## 13. 宠物高精 3D（远程 GLB）管线（#307–#311）
+
+背景：用户要求宠物 3D 造型「精细仿真」，并明确批准「放开红线做真高精 3D」。
+但 App 内原有宠物/幻想生物 3D 是 `creature_builder.dart` 程序化低多边形（同样
+走 22 骨骼 LBS 软渲染），精度达不到照片级。两条路线二选一：一是把 103 物种的
+写实高精模型**打进包**（会突破 `flutter_assets ≤1MB` 红线）；二是**运行时远程
+加载 GLB**。本管线走第二条：GLB 不进包、不占 `flutter_assets`，因此红线的
+**资产体积约束仍然成立**；突破的只是「全本地、零网络」的运行假设。
+
+### 13.1 选型与依赖
+
+- 渲染引擎：`flutter_3d_controller ^2.3.0`（底层 Google **model-viewer** WebView），
+  支持 GLB/glTF/OBJ，带相机/动画/自动旋转/手势拦截，移动端稳定。
+- `pubspec.yaml` 新增 `flutter_3d_controller: ^2.3.0`。
+- Android：`android/app/src/main/AndroidManifest.xml` 已声明 `INTERNET`
+  （model-viewer 联网加载远程 GLB 必需）；**不**启用 `cleartextTraffic`，强制 https。
+- iOS：`ios/Runner/Info.plist` 增加 `io.flutter.embedded_views_preview = YES`
+  （WebView 嵌入式视图预览，现代 Flutter 默认已开，保留以兼容旧系统）。
+- `minSdk` 继承 Flutter 默认（≥21），满足插件要求，无需改 `build.gradle.kts`。
+
+### 13.2 文件职责
+
+| 文件 | 职责 |
+| --- | --- |
+| `lib/core/avatar3d/pet_glb_manifest.dart`（**新增**） | 高精资产清单：`PetGlbEntry`（speciesId/src/srcType/autoRotate/相机角）与 `PetGlbManifest`（按 species id 索引、`pilotEnabled` 全局开关、`forSpeciesId` / `forSpeciesName` / `registeredSpecies`）。只做「物种 → 资产」映射与开关，不下载不渲染。 |
+| `lib/core/avatar3d/glb_pet_viewer.dart`（**新增**） | `GlbPetViewer`：封装 `Flutter3DViewer`，加载成功即呈现远程 GLB（可自动旋转），加载成功/失败回调；内置 12s 看门狗超时，超时或 `onError` 通过 `onFallback` 触发上层回落程序化。 |
+| `lib/core/life/pet_catalog.dart`（改） | 新增 `PetCatalog.speciesIdByName(String?)`：中文二级品类名（如「家猫」「柯尔鸭」）→ 稳定 species id，供资产匹配反查。 |
+| `lib/features/life/life_avatar_page.dart`（改） | 形象页接入：有高精资产且 `pilotEnabled` 时优先 `GlbPetViewer`，否则/失败回落 `Avatar3DView`；AppBar 提供「高精 / 风格化」手动切换；捏脸/模板/多套逻辑不变。 |
+
+### 13.3 解析链路
+
+```
+Pet.species(中文名)  →  PetCatalog.speciesIdByName  →  species id
+  →  PetGlbManifest.forSpeciesId(id)  →  PetGlbEntry(src)  →  GlbPetViewer
+  └─ 无条目 / pilotEnabled=false / 加载失败|超时  →  Avatar3DView(程序化)
+```
+
+`life_avatar_page.dart` 在 `_load()` 里用 `PetGlbManifest.forSpeciesName(pet.species)`
+取条目并设 `_useGlb`；`_viewerArea()` 据此在 `GlbPetViewer` 与 `Avatar3DView` 间切换；
+`GlbPetViewer.onFallback`（失败/12s 超时）回调 `_fallbackToProcedural()` 把 `_useGlb`
+置 false 并重建，回到程序化网格。AppBar 的「高精 / 风格化」按钮允许手动切换，
+即便 GLB 已加载也可随时回退到风格化模型。
+
+### 13.4 资产来源与诚实边界（**关键**）
+
+- **本环境无法生成 GLB 文件**，且 103 个物种的写实高精模型需要**从 CC0 源获取或用户自备**。
+  清单当前只登记 `fox` → Khronos Fox.glb、`duck` → Khronos Duck.glb 两个 **CC0 示例**
+  做管线试点（Khronos glTF-Sample-Models，公共领域；raw.githubusercontent.com 自带
+  `Access-Control-Allow-Origin: *`，满足 model-viewer CORS 要求）。
+- 其余 101 个物种暂未登记，`forSpeciesId` 返回 null，自动走程序化兜底。
+- 生产环境应把自有/采购的 CC0 宠物 GLB 托管到**带 CORS 头的 HTTPS CDN**，并在
+  `PetGlbManifest._entries` 按 species id 登记即可，无需改渲染代码。
+- 安全约定：只接受 https + CORS 远程 GLB，不启用 cleartextTraffic，保持安全姿态。
+
+### 13.5 测试
+
+`test/pet_glb_manifest_test.dart` 守护纯 Dart 逻辑（不依赖 Flutter 视图）：
+`speciesIdByName('家猫')=='cat'`、`speciesIdByName('柯尔鸭')=='duck'`、
+`forSpeciesName('狐')` 命中 fox 条目、`forSpeciesId('cat')` 为 null（未登记）、
+`pilotEnabled=false` 时所有查询返回 null、注册列表含 fox/duck。
+
+### 13.6 已知边界
+
+- **网络依赖**：高精通道必须联网且远程资源带 CORS；弱网/离线/资源 404 时自动回落
+  程序化模型，不会白屏。可在「完全离线」等场景下把 `PetGlbManifest.pilotEnabled`
+  设为 false 强制全程序化。
+- **平台**：Android/iOS/Web 稳定，macOS 为 beta；本管线面向移动端。
+- **精度**：GLB 的精度取决于资产本身（CC0 示例精度有限）；真正照片级宠物模型需
+  引入高质量 CC0/自产资产，本管线已为此预留按 id 登记的扩展点。

@@ -350,6 +350,20 @@ abstract final class PetCatalog {
     return null;
   }
 
+  /// 中文二级品类名（如「家猫」「柯尔鸭」）→ 稳定 species id。
+  ///
+  /// 实体档案 [Pet.species] 存的是中文名，而 GLB 资产清单按稳定 id 索引，
+  /// 这里把展示名反查成 id，供高精 3D 管线做资产匹配。重名时返回首个命中。
+  static String? speciesIdByName(String? name) {
+    if (name == null || name.isEmpty) return null;
+    for (final c in kPetCategories) {
+      for (final s in c.species) {
+        if (s.name == name) return s.id;
+      }
+    }
+    return null;
+  }
+
   static int get speciesCount => kPetCategories.fold(
       0, (sum, c) => sum + c.species.length);
 

@@ -4,6 +4,10 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- flutter_3d_controller 基于 WebView(model-viewer) 渲染远程 GLB，
+	     需开启 iOS 嵌入式视图预览（现代 Flutter 默认已启用，保留以兼容旧系统）。 -->
+	<key>io.flutter.embedded_views_preview</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<!-- 语音消息 / 语音转文字需要麦克风权限；缺少此描述会在 iOS 请求麦克风时崩溃。
