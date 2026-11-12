@@ -91,9 +91,10 @@ android {
     // 零引用（grep litert|LiteRT|Gemma 仓库全无命中），因此以下后端在 CPU-only 路径下
     // 永不被 dlopen，属纯冗余体积：
     //   1) llamadart 的 Vulkan 后端（约 42MB）；
-    //   2) LiteRT 的 GPU / WebGPU 加速器 + OpenCL/WebGPU 采样器 + Dawn WebGPU 运行时
+    //   2) LiteRT 的 GPU / WebGPU / OpenCL 加速器 + OpenCL/WebGPU 采样器 + Dawn WebGPU 运行时
     //      （libwebgpu_dawn / libLiteRtGpuAccelerator / libLiteRtWebGpuAccelerator /
-    //       libLiteRtTopKOpenClSampler / libLiteRtTopKWebGpuSampler，约 21.8MB）；
+    //       libLiteRtOpenClAccelerator / libLiteRtTopKOpenClSampler / libLiteRtTopKWebGpuSampler，
+    //       约 24.9MB；曾遗漏 libLiteRtOpenClAccelerator.so≈3.04MB，导致「OpenCL 已排除」名不副实）；
     //   3) LiteRT 的 CPU 推理核心（libLiteRtLm.so / libGemmaModelConstraintProvider.so，
     //      约 29MB）——Google AI Edge 的 LLM 运行时，与 llama.cpp(GGUF) 是完全独立的栈，
     //      本 App 从不走此路径，为死重。已在 tools/check_apk_size.py 加「必须 absent」硬断言。
@@ -112,6 +113,7 @@ android {
                 "libwebgpu_dawn.so",
                 "libLiteRtGpuAccelerator.so",
                 "libLiteRtWebGpuAccelerator.so",
+                "libLiteRtOpenClAccelerator.so",
                 "libLiteRtTopKOpenClSampler.so",
                 "libLiteRtTopKWebGpuSampler.so",
                 // LiteRT CPU 推理核心（与 GGUF/llama.cpp 无关的死重）

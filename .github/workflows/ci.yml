@@ -235,9 +235,10 @@ jobs:
           --split-per-abi --target-platform android-arm64
           --obfuscate --split-debug-info=build/app/dart-symbols/apk
 
-      - name: Verify APK size budget (M1~M4, model-not-bundled)
-        # 硬断言：单 ABI、flutter_assets ≤1MB、总体积 ≤92MB 未压缩、
-        # APK ≤100MB、assets/ 内不得出现 GLB/VRM/GGUF 等模型权重。
+      - name: Verify APK size budget (M1~M4 + M3d, model-not-bundled)
+        # 硬断言：单 ABI、flutter_assets 可控 ≤1MB（3D 运行时 model-viewer 单列豁免 ≤1.5MB）、
+        # 未压缩总体积 ≤105MB、APK ≤100MB、assets/ 内不得出现 GLB/VRM/GGUF 等模型权重，
+        # 且 GPU / WebGPU / OpenCL 后端（含 libLiteRtOpenClAccelerator.so）与 LiteRT CPU 核心不得出现。
         # shrinkResources 裁不到 flutter_assets 与 lib/*.so，必须单独守。
         run: |
           APK=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk

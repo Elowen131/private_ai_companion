@@ -111,8 +111,8 @@ L4 回归守护   ── perf 测试 / 静态分析 / 专项测试 / CI 门禁
 
 | 指标 | 目标 | 现状 | 测量方法 |
 |---|---|---|---|
-| M1 arm64 单包未压缩 | ≤ 105 MB | ≈ 82.4 MB（排除 Vulkan + LiteRT GPU/WebGPU/OpenCL 后端后；CI 实测排除前 104.21MB） | `unzip -l app-arm64-v8a-release.apk` 分类求和 |
-| APK 文件（压缩后） | ≤ 100 MB | ≈ 80.4 MB（排除前 102.19MB，曾触发 APK 门禁） | `stat` APK 文件 |
+| M1 arm64 单包未压缩 | ≤ 105 MB | ≈ 58 MB（CI 实测未压缩 58.15 MB；已排除 Vulkan + LiteRT GPU/WebGPU/OpenCL 后端与 LiteRT CPU 核心） | `unzip -l app-arm64-v8a-release.apk` 分类求和 |
+| APK 文件（压缩后） | ≤ 100 MB | ≈ 54.7 MB（CI 实测 54.73 MB） | `stat` APK 文件 |
 | M2 `flutter_assets`（**可控部分**，不含 3D 运行时） | ≤ 1 MB | ≈ 0.58 MB | `unzip -l` 分类求和；flutter_3d_controller 内置 model-viewer 运行时 ≈0.91MB 单列豁免（M3d ≤1.5MB） |
 | M3d 3D 运行时（model-viewer） | ≤ 1.5 MB | ≈ 0.91 MB | 必要功能资产（flutter_3d_controller 内置，WebView 本地注入、无法 CDN）；仅防版本膨胀 |
 | M3 新增依赖 | 0 个原生库 / 0 个 native hook | 加密用 `pointycastle` 纯 Dart（+`convert`/`js`） | `pubspec.lock` diff + APK `lib/` 对比 |
@@ -165,7 +165,7 @@ L4 回归守护   ── perf 测试 / 静态分析 / 专项测试 / CI 门禁
 | 加密/备份 | `test/snapshot_cipher_test.dart` + `test/encrypted_snapshot_test.dart`（28 项） |
 | VRM/3D | `test/vrm_import_test.dart`（7 项）+ `avatar3d_perf_test.dart` 帧耗时门禁 |
 | 兼容 | `backup_service_test.dart` / `backup_hardening_test.dart` / `db_policies_test.dart` 固定 `snapshot_encryption='off'` 守旧明文分支 |
-| 包体 | ✅ **已落地**（§10 / §10.5）：`tools/check_apk_size.py` + CI 硬门禁，断言单 ABI / `flutter_assets` ≤1MB / 未压缩 ≤105MB / APK ≤100MB / assets 内无模型权重 / **Vulkan 后端不得出现** / **LiteRT GPU/WebGPU/OpenCL 后端与 Dawn 不得出现** / **LiteRT CPU 推理核心不得出现**；另在 `build.gradle.kts` 排除 42MB `libggml-vulkan.so` + ≈21.8MB LiteRT GPU/WebGPU/OpenCL 后端与 Dawn + ≈29.3MB LiteRT CPU 推理核心（已验证 CPU-only 推理 + 纯 Dart CPU 软渲染 3D + 全 GGUF 模型 + 零 LiteRT 代码引用，永不加载；CPU 核心待真机 `adb logcat` 收尾） |
+| 包体 | ✅ **已落地**（§10 / §10.5）：`tools/check_apk_size.py` + CI 硬门禁，断言单 ABI / `flutter_assets` ≤1MB / 未压缩 ≤105MB / APK ≤100MB / assets 内无模型权重 / **Vulkan 后端不得出现** / **LiteRT GPU/WebGPU/OpenCL 后端与 Dawn 不得出现** / **LiteRT CPU 推理核心不得出现**；另在 `build.gradle.kts` 排除 42MB `libggml-vulkan.so` + ≈24.9MB LiteRT GPU/WebGPU/OpenCL 后端（含 `libLiteRtOpenClAccelerator.so`）与 Dawn + ≈29.3MB LiteRT CPU 推理核心（已验证 CPU-only 推理 + 纯 Dart CPU 软渲染 3D + 全 GGUF 模型 + 零 LiteRT 代码引用，永不加载；CPU 核心待真机 `adb logcat` 收尾） |
 | 成本契约 | ✅ **已落地**：`test/performance_budget_test.dart` 锁住打字机局部刷新、话题库惰性、渲染器不回退 `sublist`、pubspec 文件白名单、CI 符号分离 |
 | 画面等价 | ✅ **已落地**：`test/frame_buffer_reuse_test.dart` GPU / 软件双路径逐像素对比 |
 

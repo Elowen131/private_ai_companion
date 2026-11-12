@@ -48,6 +48,9 @@ GPU_BACKEND_NAMES = (
     "libwebgpu_dawn.so",
     "libLiteRtGpuAccelerator.so",
     "libLiteRtWebGpuAccelerator.so",
+    # OpenCL 加速器本体（≈3.04MB）：早先只排除了 OpenCL TopK 采样器而漏了它，
+    # 导致「OpenCL 后端已排除」名不副实。现已在 build.gradle.kts 一并排除并在此硬断言。
+    "libLiteRtOpenClAccelerator.so",
     "libLiteRtTopKOpenClSampler.so",
     "libLiteRtTopKWebGpuSampler.so",
 )
@@ -194,7 +197,8 @@ def main() -> int:
         failures.append(
             "lib/ 内出现 LiteRT GPU/WebGPU/OpenCL 后端或 Dawn WebGPU 运行时"
             "（libwebgpu_dawn / libLiteRtGpuAccelerator / libLiteRtWebGpuAccelerator /"
-            " libLiteRtTopKOpenClSampler / libLiteRtTopKWebGpuSampler，约 21.8MB）；"
+            " libLiteRtOpenClAccelerator / libLiteRtTopKOpenClSampler / libLiteRtTopKWebGpuSampler，"
+            "约 24.9MB）；"
             "本 App 端侧推理固定 gpuLayers=0（CPU-only）且 3D 为纯 Dart CPU 软渲染，"
             "这些后端永不加载，应从 android/app/build.gradle.kts 的 packaging jniLibs excludes 排除；"
             "如需启用 GPU 推理须同步设置 nGpuLayers>0 并在真机验证"
