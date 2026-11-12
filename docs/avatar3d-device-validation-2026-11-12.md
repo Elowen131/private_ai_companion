@@ -21,8 +21,36 @@
 - **本机实测**：`CONNECT` 隧道建立后 TLS 被掐断，`http=000`、30s 超时、0 字节——与本项目此前 sqlite3 构件下载撞的是同一堵墙。
 - **链接本身有效**：同一份 GitHub 文件经 `cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Models@master/...` 返回 `206 Partial Content`、`Content-Type: model/gltf-binary`、`access-control-allow-origin: *`（**CORS 满足 model-viewer 要求**）。
 - **产品含义**：若目标用户在普通国内网络，`raw.githubusercontent.com` 常年不可达 → 高精通道 100% 触发回落，3D 管线等于不生效。
-- **建议修复（验证后单独提交，不在本轮改）**：把 `src` 换成 jsdelivr 同源 CDN；资产内容与 CC0 来源不变，现有测试只断言 `src contains('Fox.glb')` / `Duck.glb`，兼容。
+- **建议修复（验证后单独提交，不在本轮改）**：把 `src` 换成 §1.1 实测可达且带 CORS 的源（如 `gcore.jsdelivr.net` / `cdn.jsdmirror.com`），生产仍建议自有对象存储 + CDN；资产内容与 CC0 来源不变，现有测试只断言 `src contains('Fox.glb')` / `Duck.glb`，兼容。**注意 `cdn.jsdelivr.net` 主域在目标网络同样被阻断，不可作为备选**（见 §1.1 实测修正）。
 - **验证要求**：T1 必须分「可达网络」与「普通用户网络」各跑一遍，如实记录两种结果。若普通网络 100% 回落，此项即**阻断发布**，须先修源再复验。
+
+## 1.1 首轮实测记录（2026-11-12 晚，真机接入后）
+
+**设备**：真机 `d641192` = Xiaomi `25067PYE3C` / Android 16 (SDK 36) / arm64-v8a。另有 `emulator-5554`（x86_64 腾讯云手机实例）。
+
+**手机端 HTTPS 实测**（`adb shell curl`，带 `--capath /system/etc/security/cacerts`）：
+
+| 域名 | 结果 | 结论 |
+|---|---|---|
+| `www.baidu.com` | 200 / 0.12s | 对照组：手机网络与 CA 正常 |
+| `mirrors.tuna.tsinghua.edu.cn` | 206 / 0.33s | 同上 |
+| `raw.githubusercontent.com` | `http=000` / `Connection reset by peer` | **被 TLS 层阻断**（ping 通但 HTTPS 被 RST） |
+| `cdn.jsdelivr.net` | `http=000` / `Connection reset by peer` | **同样被阻断 → 上一版「切 jsdelivr 主域」建议作废** |
+| `gcore.jsdelivr.net` | **206** / 1.13s | 可达 |
+| `cdn.jsdmirror.com` | **206** / 2.00s | 可达 |
+| `registry.npmmirror.com` / `gitee.com` | 206 / 200 | 国内基础设施可达 |
+
+两个可达源均已核实响应头：`Content-Type: model/gltf-binary` + `access-control-allow-origin: *`，**满足 model-viewer 的 CORS 要求**，可作为 P0 修复候选（属第三方镜像，稳定性需评估；生产仍建议自有对象存储 + CDN）。`raw.gitmirror.com` / `ghproxy.net` 在手机端均不可达。
+
+> **P0 结论修正**：目标网络下不只是主源不可达，而是**主源与首选备用源同时被阻断**。必须以「国内可达且带 CORS」为硬条件重新选源；T1a 需在可达网络下单独构造（配置代理或先换源）。
+
+**构建产物**：`flutter pub get` 因代理 `pub.dev 502` 失败，但依赖缓存完整，`flutter build apk --debug` 仍成功（133.8s）。产物 `build/app/outputs/flutter-apk/app-debug.apk`（324 MB，20:58，含 arm64-v8a / armeabi-v7a / x86_64），已确认内含 `model_viewer.min.js`（931,829 B）与模板，为最新 `9c20992` 代码。
+
+**安装受阻（需用户手机侧操作）**：
+- 真机 adb 连接不稳定：沙箱每次命令重启 adb daemon，设备反复 `offline` / `not found`；`adb install -r` 连续失败且**错误码为空**，疑似小米 HyperOS「USB 安装」保护。
+- 请在手机上：① 保持解锁、重新插拔数据线并在弹窗勾选「一律允许 USB 调试」；② 开发者选项开启 **「USB 安装」/「通过 USB 安装应用」**（小米通常要求登录小米账号 + 插 SIM）；③ 若仍受限，尝试关闭「MIUI 优化」；④ 完成后告知，我用 `adb -s d641192 install -r <apk>` 重装。
+- **模拟器已排除**：`emulator-5554` 是腾讯云手机实例，安装成功但系统 `ActivityManager: BLOCK ... top-activity start` 直接禁止启动第三方应用，且为 x86_64（项目 native 库偏 arm64）。不必再试。
+- 备选：在能直连 GitHub 的机器下载 CI run `43209821779` 的 `app-release-bundle`，把其中 arm64 release APK 拷到手机侧载安装。
 
 ## 2. 前置条件
 
@@ -123,6 +151,7 @@ GLB 首帧耗时：___ s   回落耗时：___ s
 ## 7. 发布前 Checklist 剩余项（与验收文档 §7 对齐）
 
 - [x] 确认 HEAD 代码基线对应 CI run 全绿（`43209821779`）
+- [ ] 手机侧完成 USB 调试/USB 安装授权，成功安装最新 debug 包（见 §1.1 受阻记录）
 - [ ] **本指导书全部用例执行完毕并归档**
 - [ ] 若 T1b 坐实 P0：GLB 源切换为可达 CDN，另开提交 + 重跑 CI + 复验
 - [ ] 确认 `pilotEnabled` 全局开关取值符合发布策略（当前默认 `true`）
