@@ -214,6 +214,15 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      - name: Patch flutter_inappwebview proguard (AGP incompatibility workaround)
+        # flutter_inappwebview_android 1.1.3（flutter_3d_controller 的传递依赖）的
+        # android/build.gradle 调用了 getDefaultProguardFile('proguard-android.txt')，
+        # 新版 AGP（随 Flutter 3.47.9 捆绑）在评估阶段直接拒绝该调用，导致
+        # `flutter build apk/aab` 构建失败（与是否 --obfuscate 无关）。此处改写为
+        # AGP 推荐的 proguard-android-optimize.txt（release 安全，无行为变化）。
+        # 必须在 pub get 之后、build 之前执行；幂等，仅当旧字符串仍存在时改写。
+        run: bash tools/patch_inappwebview_proguard.sh
+
       - name: Build release APK (no signing -> debug-sign fallback)
         # PRD 11.4：按 ABI 分包、arm64-v8a 为主。限定单一目标平台既满足分包，
         # 又避免全 ABI 重复编译 llama.cpp 原生库把 7GB CI runner 拖垮 / OOM。
