@@ -1,0 +1,111 @@
+# 宠物高精 3D 管线 · 真机验证作业指导书（2026-11-12）
+
+> 配套：[`avatar3d-acceptance-2026-11-12.md`](avatar3d-acceptance-2026-11-12.md)（版本验收）、[`avatar3d-workshop.md`](avatar3d-workshop.md) §13（技术设计）。
+> 本文件只管**真机怎么验、验什么、怎么判定**，不含功能变更。
+
+## 0. 先读：基线与硬约束
+
+| 项 | 结论 |
+|---|---|
+| 被测代码基线 | **`9c20992`**（CI run `43209821779` 全绿）；`33b0a70` 为纯文档修订、不含代码 |
+| 验证纪律 | **验证阶段不得修改被测代码**。发现问题只记录为缺陷，修复另开提交并重跑 CI，否则验的就不是已验收基线 |
+| 本机环境 | Windows；`adb` 已确认存在但**当前无任何设备连接**（`adb devices` 为空） |
+| iOS 能力 | 本机**无 Xcode / xcrun**，iOS 真机验证**必须在 macOS + Xcode 上完成** |
+| 本地已有 APK | 均为 11-10 07:42 构建，早于 3D 代码最后修改 08:12 → **过期，不可直接装机验证** |
+| 签名 | `android/key.properties` + `android/app/keystore/release.keystore` **本地已就位**（均在 .gitignore，不入库）；CI 无密钥，走 debug-sign fallback |
+
+## 1. ⚠️ P0 风险：GLB 源在受限网络不可达（本轮必须验出来）
+
+`lib/core/avatar3d/pet_glb_manifest.dart` 的 fox / duck 指向 `raw.githubusercontent.com`：
+
+- **本机实测**：`CONNECT` 隧道建立后 TLS 被掐断，`http=000`、30s 超时、0 字节——与本项目此前 sqlite3 构件下载撞的是同一堵墙。
+- **链接本身有效**：同一份 GitHub 文件经 `cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Models@master/...` 返回 `206 Partial Content`、`Content-Type: model/gltf-binary`、`access-control-allow-origin: *`（**CORS 满足 model-viewer 要求**）。
+- **产品含义**：若目标用户在普通国内网络，`raw.githubusercontent.com` 常年不可达 → 高精通道 100% 触发回落，3D 管线等于不生效。
+- **建议修复（验证后单独提交，不在本轮改）**：把 `src` 换成 jsdelivr 同源 CDN；资产内容与 CC0 来源不变，现有测试只断言 `src contains('Fox.glb')` / `Duck.glb`，兼容。
+- **验证要求**：T1 必须分「可达网络」与「普通用户网络」各跑一遍，如实记录两种结果。若普通网络 100% 回落，此项即**阻断发布**，须先修源再复验。
+
+## 2. 前置条件
+
+### Android 真机
+- arm64-v8a 机型，Android 8.0+；开启开发者选项 + USB 调试，USB 模式选「传输文件」。
+- 数据线连接后确认状态为 `device`（不是 `unauthorized` / `offline`）：
+  ```bash
+  "C:/Users/11827/AppData/Local/Android/Sdk/platform-tools/adb.exe" devices -l
+  ```
+- 手机与开发机网络按 §1 的两种网络分别准备（Wi-Fi / 蜂窝 / 代理）。
+
+### iOS 真机
+- macOS + Xcode；`ios/Runner.xcworkspace` 用 Xcode 打开。
+- 当前工程 `CODE_SIGN_STYLE = Automatic` 但**未设置 `DEVELOPMENT_TEAM`** → 首次需在 Signing & Capabilities 选 Team，并在真机「设置 → 通用 → VPN 与设备管理」信任开发者证书。
+- 注意：CI 的 `Build iOS` 只做 `--simulator` **编译校验**，不能替代真机 WKWebView 渲染验证。
+
+## 3. 拿到可安装的包（两条路径）
+
+**路径 A · 下载本次全绿 CI 产物（最快，代码即 `9c20992`，无需本地构建）**
+浏览器打开 `https://github.com/Elowen131/private_ai_companion/actions/runs/43209821779`，下载 `app-release-bundle`（内含 arm64 release APK，CI 实测 51.68 MB）。
+> 本机 `gh run download` 实测 200s 超时（代理挡 GitHub 下载），需在能直连 GitHub 的网络/浏览器里取。CI 无 release keystore，产物为 debug-sign，可直接 `adb install`。
+
+**路径 B · 本地重建（本环境可行）**
+```bash
+cd <项目根>
+flutter pub get
+bash tools/patch_inappwebview_proguard.sh     # CI 已自动做，本地必须补；幂等
+flutter build apk --debug                     # 推荐：免签名、含最新代码
+"C:/Users/11827/AppData/Local/Android/Sdk/platform-tools/adb.exe" install -r build/app/outputs/flutter-apk/app-debug.apk
+```
+release 版（本地密钥已就位，用于验证 `--obfuscate` 与包体）：
+```bash
+flutter build apk --release --split-per-abi --target-platform android-arm64 \
+  --obfuscate --split-debug-info=build/app/dart-symbols/apk
+python3 tools/check_apk_size.py build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+```
+
+**抓日志**（回落时会打印 `[GlbPetViewer] 模型加载失败，回落程序化：<error>`）：
+```bash
+adb logcat -v time | grep -iE "GlbPetViewer|model-viewer|flutter|WebView"
+```
+
+## 4. 验证用例矩阵
+
+> UI 锚点：形象区高精时文案 `高精 GLB 模型（远程加载 · fox/duck）`，回落时文案 `N 三角形 · M 骨骼 …`；AppBar 切换按钮 key `avatar_toggle_precision`，按钮文字是**点击后要切到的模式**（高精态显示「风格化」）。
+
+| # | 场景 | 操作 | 预期结果 | 判定 |
+|---|---|---|---|---|
+| T1a | 高精加载（**可达 GLB 源的网络**） | 进入宠物页，物种为狐 / 柯尔鸭 | 12s 内出现高精文案，WebView 渲染 GLB、自动旋转、可拖动缩放 | ☐ |
+| T1b | 高精加载（**普通用户网络**） | 同上，不挂代理 | 如实记录：成功 / 回落。**若回落 → P0 坐实，阻断发布** | ☐ |
+| T2 | 断网回落 | 开飞行模式后进入页面 | 12s 看门狗回落程序化；无白屏、无崩溃、无无限加载圈；logcat 有回落日志 | ☐ |
+| T3 | 弱网超时 | 限速使 GLB 超过 12s | 12s 触发回落；顺带评估 12s 固定阈值是否误杀正常弱网 | ☐ |
+| T4 | 未登记物种 | 任选非 fox/duck 的物种 | 直接程序化，不发起 GLB 请求（`PetGlbManifest.registeredSpecies` 仅 fox/duck） | ☐ |
+| T5 | 高精↔风格化切换 | 点 AppBar 按钮来回切 3 次 | 两种模式都正常渲染、不白屏、不重复叠加 WebView | ☐ |
+| T5b | **待确认缺陷** | 未登记物种（T4 状态）点「高精」 | 按钮文字变「风格化」但画面**仍是程序化**——`onPressed` 无条件翻转 `_useGlb`，而 `showGlb = _useGlb && _glb != null`，UI 状态与实际不符。**记录为 BUG，本轮不改代码** | ☐ |
+| T6 | 全局试点开关 | 开发构建临时置 `PetGlbManifest.pilotEnabled = false` | 所有物种回落程序化，不发网络请求 | ☐ |
+| T7 | 生命周期 | 切后台/回前台、锁屏解锁、旋转屏幕 | WebView 不黑屏、不崩、不重复加载；旋转后布局正常 | ☐ |
+| T8 | 反复进出 | 进出宠物页 10 次 | 无内存持续增长、无 WebView 泄漏、无明显卡顿 | ☐ |
+| T9 | **iOS 真机专属** | Xcode Run 到真机 | WKWebView 嵌入视图能真实渲染（模拟器编译校验不算）、触摸手势正常、证书已信任 | ☐ |
+| T10 | 安装与启动 | 冷启动首次进入宠物页 | 安装无 `INSTALL_FAILED_*`，启动不闪退，首屏可见 | ☐ |
+
+## 5. 判定标准
+
+- **通过**：T1a 渲染成功 + T2/T4 回落正确 + T7/T10 无崩溃 + T9（iOS）真机渲染成功；且 T1b 在目标用户网络下也能成功。
+- **阻断发布**：T1b 100% 回落 → 必须先按 §1 修 GLB 源（另开提交 + 重跑 CI），再复验 T1/T2。
+- **记录为缺陷、不阻断**：T5b 的 UI 文案不一致；T3 若证实 12s 阈值误杀，可另议超时策略。
+
+## 6. 记录模板
+
+```
+设备型号 / OS：
+网络环境（Wi-Fi / 蜂窝 / 代理 / 飞行模式）：
+包名与来源（CI 产物 or 本地构建 / commit）：
+T1a __  T1b __  T2 __  T3 __  T4 __  T5 __  T5b __  T6 __  T7 __  T8 __  T9 __  T10 __
+GLB 首帧耗时：___ s   回落耗时：___ s
+截图 / logcat 片段：（附件）
+结论：通过 / 阻断（原因）
+```
+
+## 7. 发布前 Checklist 剩余项（与验收文档 §7 对齐）
+
+- [x] 确认 HEAD 代码基线对应 CI run 全绿（`43209821779`）
+- [ ] **本指导书全部用例执行完毕并归档**
+- [ ] 若 T1b 坐实 P0：GLB 源切换为可达 CDN，另开提交 + 重跑 CI + 复验
+- [ ] 确认 `pilotEnabled` 全局开关取值符合发布策略（当前默认 `true`）
+- [ ] 灰度推送，观察 3D 加载成功率与回落率

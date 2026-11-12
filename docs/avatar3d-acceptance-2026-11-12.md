@@ -73,6 +73,8 @@
 
 ## 7. 发布前 Checklist
 
+> 真机验证的执行步骤、用例矩阵与判定标准见 [`avatar3d-device-validation-2026-11-12.md`](avatar3d-device-validation-2026-11-12.md)。
+
 - [x] 确认 **HEAD 代码基线**对应的 CI run 全绿（`43209821779` / `9c20992`）——警惕 `cancel-in-progress` 取消最新 run 造成的「假闭环」
 - [ ] 本地按 §5 跑通 `flutter build apk`（含 proguard 补丁）
 - [ ] 本地 `flutter build ios` 真机/模拟器验证 WebView 高精渲染与回落
