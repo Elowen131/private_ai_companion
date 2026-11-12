@@ -44,13 +44,16 @@
 
 > **P0 结论修正**：目标网络下不只是主源不可达，而是**主源与首选备用源同时被阻断**。必须以「国内可达且带 CORS」为硬条件重新选源；T1a 需在可达网络下单独构造（配置代理或先换源）。
 
-**构建产物**：`flutter pub get` 因代理 `pub.dev 502` 失败，但依赖缓存完整，`flutter build apk --debug` 仍成功（133.8s）。产物 `build/app/outputs/flutter-apk/app-debug.apk`（324 MB，20:58，含 arm64-v8a / armeabi-v7a / x86_64），已确认内含 `model_viewer.min.js`（931,829 B）与模板，为最新 `9c20992` 代码。
+**构建产物**（均为最新 `9c20992` 代码）：
+- `flutter pub get` 因代理 `pub.dev 502` 失败，但依赖缓存完整，`flutter build apk --debug` 仍成功（133.8s）→ `app-debug.apk` 324 MB / 20:58，含 arm64-v8a / armeabi-v7a / x86_64，已确认内含 `model_viewer.min.js`（931,829 B）与模板。
+- 为降低 USB 传输量另建 `flutter build apk --release --split-per-abi --target-platform android-arm64`（224.4s）→ **`app-arm64-v8a-release.apk` 53.4 MB / 21:12**，推荐用于装机。
 
-**安装受阻（需用户手机侧操作）**：
-- 真机 adb 连接不稳定：沙箱每次命令重启 adb daemon，设备反复 `offline` / `not found`；`adb install -r` 连续失败且**错误码为空**，疑似小米 HyperOS「USB 安装」保护。
-- 请在手机上：① 保持解锁、重新插拔数据线并在弹窗勾选「一律允许 USB 调试」；② 开发者选项开启 **「USB 安装」/「通过 USB 安装应用」**（小米通常要求登录小米账号 + 插 SIM）；③ 若仍受限，尝试关闭「MIUI 优化」；④ 完成后告知，我用 `adb -s d641192 install -r <apk>` 重装。
+**安装受阻（USB 链路，需用户手机侧操作）**：
+- 真机 adb 连接不稳定：沙箱每次命令重启 adb daemon，设备反复 `offline` / `not found`。
+- **实测结论：USB 链路持续大流量即掉线，不是安装权限问题**（修正上一版「疑似小米 USB 安装保护」的误判）。本轮分别用 324MB 全 ABI debug 包与新建的 **53.4MB arm64 release 包**执行 `adb install -r`，均在 `Performing Streamed Install` 后失败（错误码为空 + `device offline`）；改用 PowerShell 原生调用 adb 结果相同，**排除 Git Bash MSYS 路径转换**（§3.1 记录的路径问题不是本次主因）。与 §3.1 的 325MB / 133MB / 8MB 分块实测一致 → **USB 装机路径判定不可用**。
+- **后续只能走非 USB 大流量路径**（按 §3.1 建议）：① **MTP 手动复制**：把 `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`（53.4MB，21:12 最新代码）拖进手机 `Download/`，在手机上点击安装（需允许「未知来源」）；② **无线 adb**：开发者选项 →「无线调试」→「使用配对码配对设备」，把 IP:端口与 6 位配对码给我，我来 `adb pair` / `adb connect`；③ 换原装数据线 / 主板后置 USB 2.0 口、手机保持解锁亮屏；④ 在能直连 GitHub 的网络下载 CI run `43209821779` 的 `app-release-bundle`（51.68MB APK）侧载。
+- 装好后 adb 只剩 `am start` / `logcat` / `screencap` 等**小流量**命令，链路稳定，可按 §4 继续自动验证。
 - **模拟器已排除**：`emulator-5554` 是腾讯云手机实例，安装成功但系统 `ActivityManager: BLOCK ... top-activity start` 直接禁止启动第三方应用，且为 x86_64（项目 native 库偏 arm64）。不必再试。
-- 备选：在能直连 GitHub 的机器下载 CI run `43209821779` 的 `app-release-bundle`，把其中 arm64 release APK 拷到手机侧载安装。
 
 ## 2. 前置条件
 
