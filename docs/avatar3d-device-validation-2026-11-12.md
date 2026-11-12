@@ -65,6 +65,24 @@ python3 tools/check_apk_size.py build/app/outputs/flutter-apk/app-arm64-v8a-rele
 adb logcat -v time | grep -iE "GlbPetViewer|model-viewer|flutter|WebView"
 ```
 
+### 3.1 本机装机踩坑记录（2026-11-12 实测，Redmi Note 11 Pro / luming）
+
+| 现象 | 原因 | 对策 |
+|---|---|---|
+| 手机只被识别成 WPD/MTP「Redmi Note 11 Pro」，adb 无设备 | USB 调试未开 / 未授权 | 开发者选项开启 USB 调试，手机弹窗勾选「一律允许」并确认；`adb reconnect` 可重新触发弹窗 |
+| `adb shell "df -h /data"` 报 Windows 路径不存在、`adb push` 写 40KB 即失败 | **Git Bash(MSYS) 把 `/data/...` 自动转成 Windows 路径** | 用 PowerShell 原生调用 `adb.exe`，或设 `MSYS2_ARG_CONV_EXCL='*'` |
+| `flutter pub get` 后再构建仍报 `proguard-android.txt` | 补丁跑在 `pub get` **之前**；`pub get` 重新解压了 `pub.dev` 源下的包，补丁被绕过 | 顺序必须是 `pub get → patch → build`（本指导书 §3 的顺序）；补丁脚本 `found=4, patched=1` 才是补到了新副本 |
+| 325MB 全 ABI 包 push 到 45% 断、133MB arm64 包传完却 `copy response: EOF`（手机端文件被回滚）、8MB 分块亦断 | **USB 链路持续大流量后掉线**，`device offline` | 见下方「装机替代路径」；`svc power stayon usb` 不足以解决 |
+| 每条远程命令 adb daemon 都重启（`daemon not running; starting now`） | 沙箱按调用清理进程 | 每条命令开头先 `adb wait-for-device`，并在**同一会话**内完成「等待→传输→安装」 |
+
+**装机替代路径（推荐按序尝试）**：
+1. **MTP 手动复制**：手机已被 Windows 识别为便携设备，把 `build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk`（133MB）用资源管理器拖进手机 `Download/`，在手机上点 APK 安装（需允许「未知来源」）。完全绕开 adb。
+2. **无线 adb**：Android 11+ 开发者选项 →「无线调试」→「使用配对码配对设备」，拿到 IP:端口与 6 位配对码后 `adb pair` + `adb connect`，走 Wi-Fi 传输，不受 USB 线影响。
+3. **换线/换口**：改用原装或明确支持数据的线，插主板后置 USB 2.0 口（避开扩展坞/USB 3.0），手机保持解锁亮屏；再重跑 §3 的命令。
+4. **更小的包**：构建 release 单 ABI 包（≈56MB，传输约 6s），或直接从 CI run `43209821779` 下载 `app-release-bundle`（51.68MB APK）。
+
+> 装好之后，adb 只剩 `am start` / `logcat` / `screencap` 等**小流量**命令，链路稳定，可按 §4 用例继续自动验证。
+
 ## 4. 验证用例矩阵
 
 > UI 锚点：形象区高精时文案 `高精 GLB 模型（远程加载 · fox/duck）`，回落时文案 `N 三角形 · M 骨骼 …`；AppBar 切换按钮 key `avatar_toggle_precision`，按钮文字是**点击后要切到的模式**（高精态显示「风格化」）。
