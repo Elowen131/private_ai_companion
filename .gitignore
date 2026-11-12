@@ -39,10 +39,12 @@ app.*.symbols
 # Obfuscation related
 app.*.map.json
 
-# Android Studio will place build artifacts here
+# Android Studio / Gradle will place build artifacts here
 /android/app/debug
 /android/app/profile
 /android/app/release
+# Gradle 根目录产物（reports 等），本地 flutter build 会生成
+/android/build/
 
 # Widget Preview related
 .widget_preview/
