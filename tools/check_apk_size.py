@@ -34,6 +34,14 @@ MAX_FLUTTER_ASSETS_MB = 1.0
 MAX_APK_FILE_MB = 100.0
 EXPECTED_ABI = "arm64-v8a"
 
+# 3D 查看器（flutter_3d_controller）的 WebView 渲染器必须随包内置 model-viewer 运行时
+# （packages/flutter_3d_controller/assets/model_viewer.min.js ≈ 910KB + template ≈ 1KB）。
+# 移动端 WebView 由包内本地代理以 asset 形式注入该 JS（见该包的 model_viewer_mobile.dart），
+# 无法走 CDN，属「必要功能资产」。因此 M2 只约束「可控资产」（用户资产 + NOTICES + 字体等），
+# 运行时单独单列豁免并设上限，防止未来版本膨胀或误替换。
+M3D_RUNTIME_PREFIX = "assets/flutter_assets/packages/flutter_3d_controller/assets/"
+MAX_3D_RUNTIME_MB = 1.5
+
 # 永不加载的 GPU / WebGPU / OpenCL 后端（见 android/app/build.gradle.kts 的 excludes）。
 # CPU-only 推理（gpuLayers=0）+ 纯 Dart CPU 软渲染 3D 下这些后端永不被 dlopen。
 GPU_BACKEND_NAMES = (
@@ -105,8 +113,11 @@ def main() -> int:
     abis: set[str] = set()
     bad_assets: list[str] = []
     so_entries: list[tuple[str, int]] = []
+    runtime_assets = 0
     for i in infos:
         groups[classify(i.filename)] += i.file_size
+        if i.filename.startswith(M3D_RUNTIME_PREFIX):
+            runtime_assets += i.file_size
         if i.filename.startswith("lib/"):
             parts = i.filename.split("/")
             if len(parts) > 1 and parts[1] not in ("?", ""):
@@ -123,12 +134,18 @@ def main() -> int:
 
     total = sum(groups.values())
     flutter_assets = groups.get("flutter_assets", 0)
+    runtime = runtime_assets
+    controlled = flutter_assets - runtime
     apk_mb = args.apk.stat().st_size / MB
 
     print(f"[size] APK: {args.apk}")
     print(f"[size] 压缩后文件: {apk_mb:.2f} MB / 未压缩总计: {total / MB:.2f} MB")
     for k, v in groups.most_common():
         print(f"[size]   {v / MB:9.2f} MB  {k}")
+    print(
+        f"[size]   flutter_assets 明细: 可控 {controlled / MB:.2f} MB"
+        f" + 3D运行时 {runtime / MB:.2f} MB（单列豁免）"
+    )
     print(f"[size] ABI: {', '.join(sorted(abis)) or '(none)'}")
     print("[size] top native libs:")
     for name, sz in sorted(so_entries, key=lambda x: -x[1])[:12]:
@@ -139,10 +156,17 @@ def main() -> int:
         failures.append(
             f"未压缩总体积 {total / MB:.2f} MB > 预算 {MAX_UNCOMPRESSED_MB:.0f} MB（M1）"
         )
-    if flutter_assets / MB > MAX_FLUTTER_ASSETS_MB:
+    if controlled / MB > MAX_FLUTTER_ASSETS_MB:
         failures.append(
-            f"flutter_assets {flutter_assets / MB:.2f} MB > 预算 "
-            f"{MAX_FLUTTER_ASSETS_MB:.0f} MB（M2，检查 pubspec.yaml 是否误用目录声明）"
+            f"flutter_assets 可控部分 {controlled / MB:.2f} MB > 预算 "
+            f"{MAX_FLUTTER_ASSETS_MB:.0f} MB（M2，检查 pubspec.yaml 是否误用目录声明）；"
+            f"3D 运行时 {runtime / MB:.2f} MB 已单列豁免（M3d）"
+        )
+    if runtime / MB > MAX_3D_RUNTIME_MB:
+        failures.append(
+            f"3D 运行时（model-viewer）{runtime / MB:.2f} MB > 预算 "
+            f"{MAX_3D_RUNTIME_MB:.1f} MB（M3d，flutter_3d_controller 内置运行时异常膨胀，"
+            "或 pubspec 误把整目录打进 packages 资产）"
         )
     if apk_mb > MAX_APK_FILE_MB:
         failures.append(

@@ -113,7 +113,8 @@ L4 回归守护   ── perf 测试 / 静态分析 / 专项测试 / CI 门禁
 |---|---|---|---|
 | M1 arm64 单包未压缩 | ≤ 105 MB | ≈ 82.4 MB（排除 Vulkan + LiteRT GPU/WebGPU/OpenCL 后端后；CI 实测排除前 104.21MB） | `unzip -l app-arm64-v8a-release.apk` 分类求和 |
 | APK 文件（压缩后） | ≤ 100 MB | ≈ 80.4 MB（排除前 102.19MB，曾触发 APK 门禁） | `stat` APK 文件 |
-| M2 `flutter_assets` | ≤ 1 MB | 0.49 MB | 同上 |
+| M2 `flutter_assets`（**可控部分**，不含 3D 运行时） | ≤ 1 MB | ≈ 0.58 MB | `unzip -l` 分类求和；flutter_3d_controller 内置 model-viewer 运行时 ≈0.91MB 单列豁免（M3d ≤1.5MB） |
+| M3d 3D 运行时（model-viewer） | ≤ 1.5 MB | ≈ 0.91 MB | 必要功能资产（flutter_3d_controller 内置，WebView 本地注入、无法 CDN）；仅防版本膨胀 |
 | M3 新增依赖 | 0 个原生库 / 0 个 native hook | 加密用 `pointycastle` 纯 Dart（+`convert`/`js`） | `pubspec.lock` diff + APK `lib/` 对比 |
 | M4 模型/权重随包 | 0 字节 | 0（`generated_assets` 251MB 全在仓库外） | `grep assets pubspec.yaml` |
 
