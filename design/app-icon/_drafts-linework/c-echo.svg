@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img">
+  <title>回声</title>
+  <desc>三道同向斜弧依次缩短、逐层变淡，像一句说出后留下的余音。</desc>
+  <rect x="0" y="0" width="512" height="512" rx="72" fill="#FBF9FF"/>
+  <g transform="rotate(-4 256 256) translate(256 256) scale(0.9) translate(-256 -256)">
+    <path d="M 138 178 C 214 152 300 174 358 236"
+          fill="none" stroke="#7C5CFF" stroke-width="11" stroke-linecap="round"/>
+    <path d="M 168 248 C 230 228 296 246 336 292"
+          fill="none" stroke="#B9A6F5" stroke-width="8" stroke-linecap="round"/>
+    <path d="M 200 312 C 244 300 280 310 308 340"
+          fill="none" stroke="#DCD0FA" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>

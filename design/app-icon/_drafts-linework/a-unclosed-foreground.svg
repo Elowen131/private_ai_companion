@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img">
+  <title>未合 · 前景层</title>
+  <desc>透明底前景层，供 Android 自适应图标使用；图形全部位于中央安全区内。</desc>
+  <g transform="rotate(-7 256 256) translate(256 256) scale(0.9) translate(-256 -256)">
+    <path d="M 344 148 C 396 208 400 300 336 360 C 272 420 176 400 144 328 C 116 264 132 196 180 160"
+          fill="none" stroke="#7C5CFF" stroke-width="11" stroke-linecap="round"/>
+    <path d="M 372 118 C 386 128 390 140 388 152"
+          fill="none" stroke="#C3B2F7" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>

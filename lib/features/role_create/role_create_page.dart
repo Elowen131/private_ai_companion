@@ -3,6 +3,7 @@ import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/app/router.dart';
 import 'package:private_ai_companion/data/repositories/conversation_repository.dart';
 import 'package:uuid/uuid.dart';
+import 'package:private_ai_companion/core/avatar3d/appearance_parser.dart';
 import 'package:private_ai_companion/core/media/persona_media.dart';
 import 'package:private_ai_companion/core/models/persona.dart';
 import 'package:private_ai_companion/core/persona/persona_service.dart';
@@ -33,9 +34,19 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
 
   static const _basicFields = ['name', 'identity', 'speakStyle'];
   static const _allFields = [
-    'name', 'age', 'identity', 'personality',
-    'speakStyle', 'likes', 'dislikes', 'background',
-    'worldSetting', 'relationBase', 'taboos', 'userPersona',
+    'name',
+    'age',
+    'identity',
+    'personality',
+    'speakStyle',
+    'likes',
+    'dislikes',
+    'background',
+    'worldSetting',
+    'relationBase',
+    'taboos',
+    'userPersona',
+    'appearance',
   ];
 
   List<String> get _advancedFields =>
@@ -94,18 +105,32 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
     final p = widget.initial;
     if (p == null) return '';
     switch (f) {
-      case 'name': return p.name;
-      case 'age': return p.age.toString();
-      case 'identity': return p.identity;
-      case 'personality': return p.personality.join('、');
-      case 'speakStyle': return p.speakStyle;
-      case 'likes': return p.likes;
-      case 'dislikes': return p.dislikes;
-      case 'background': return p.background;
-      case 'worldSetting': return p.worldSetting;
-      case 'relationBase': return p.relationBase;
-      case 'taboos': return p.taboos;
-      case 'userPersona': return p.userPersona;
+      case 'name':
+        return p.name;
+      case 'age':
+        return p.age.toString();
+      case 'identity':
+        return p.identity;
+      case 'personality':
+        return p.personality.join('、');
+      case 'speakStyle':
+        return p.speakStyle;
+      case 'likes':
+        return p.likes;
+      case 'dislikes':
+        return p.dislikes;
+      case 'background':
+        return p.background;
+      case 'worldSetting':
+        return p.worldSetting;
+      case 'relationBase':
+        return p.relationBase;
+      case 'taboos':
+        return p.taboos;
+      case 'userPersona':
+        return p.userPersona;
+      case 'appearance':
+        return p.appearance;
     }
     return '';
   }
@@ -119,8 +144,9 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
       await _doSave();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('保存失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存失败：$e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -134,6 +160,9 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
     ext['romanticOrientation'] = _romanticOrientation;
     ext['intimacyPrefs'] = _intimacyPrefs.toList();
     ext['userPersona'] = _form['userPersona']!.text;
+    // 外貌描述落在 ext：老库无需迁移；参与 PersonaVisualSpec 指纹，
+    // 改动后会触发 3D 形象重建。
+    ext['appearance'] = _form['appearance']!.text.trim();
 
     final p = Persona(
       id: widget.initial?.id ?? const Uuid().v4(),
@@ -231,7 +260,9 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
                       child: Text(
                         '「${p.name}」已创建',
                         style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -284,8 +315,9 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
   Future<void> _startChat(Persona p) async {
     String? conversationId;
     if (getIt.isRegistered<ConversationRepository>()) {
-      conversationId =
-          (await getIt<ConversationRepository>().createSingle(p.id)).id;
+      conversationId = (await getIt<ConversationRepository>().createSingle(
+        p.id,
+      )).id;
     }
     if (!mounted) return;
     await AppRouter.replaceWithChat(
@@ -309,7 +341,10 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
       appBar: AppBar(
         title: Text(widget.initial == null ? '创建角色' : '编辑角色'),
         actions: [
-          TextButton(onPressed: _saving ? null : _save, child: const Text('保存')),
+          TextButton(
+            onPressed: _saving ? null : _save,
+            child: const Text('保存'),
+          ),
         ],
       ),
       body: ListView(
@@ -320,8 +355,11 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.auto_awesome_outlined,
-                    size: 14, color: chQuiet(context).withValues(alpha: 0.6)),
+                Icon(
+                  Icons.auto_awesome_outlined,
+                  size: 14,
+                  color: chQuiet(context).withValues(alpha: 0.6),
+                ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
@@ -345,8 +383,10 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
             collapsedShape: const Border(),
             iconColor: chQuiet(context),
             collapsedIconColor: chQuiet(context),
-            title: const Text('更多设定（可选）',
-                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+            title: const Text(
+              '更多设定（可选）',
+              style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+            ),
             subtitle: Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(
@@ -383,9 +423,13 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-                    const Text('外观',
-                        style: TextStyle(
-                            fontSize: 12.5, fontWeight: FontWeight.w600)),
+                    const Text(
+                      '外观',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -427,7 +471,9 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
   /// 旧角色 / 导入角色可能带历史值（如 gender='女'）或库外自定义值，
   /// 这里把当前值补进选项头部，保证编辑既有角色时能正常回显。
   List<DropdownMenuItem<String>> _dropdownItems(
-      List<String> presets, String current) {
+    List<String> presets,
+    String current,
+  ) {
     final values = (current.isNotEmpty && !presets.contains(current))
         ? <String>[current, ...presets]
         : presets;
@@ -437,77 +483,84 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
   }
 
   Widget _genderField() => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: DropdownButtonFormField<String>(
-          initialValue: _gender,
-          isExpanded: true,
-          icon: Icon(Icons.expand_more, size: 18, color: chQuiet(context)),
-          style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurface),
-          decoration: chInput(context, label: '多元性别'),
-          items: _dropdownItems(genderLibrary, _gender),
-          onChanged: (v) => setState(() => _gender = v!),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: 12),
+    child: DropdownButtonFormField<String>(
+      initialValue: _gender,
+      isExpanded: true,
+      icon: Icon(Icons.expand_more, size: 18, color: chQuiet(context)),
+      style: TextStyle(
+        fontSize: 13,
+        color: Theme.of(context).colorScheme.onSurface,
+      ),
+      decoration: chInput(context, label: '多元性别'),
+      items: _dropdownItems(genderLibrary, _gender),
+      onChanged: (v) => setState(() => _gender = v!),
+    ),
+  );
 
   Widget _orientationFields() => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: DropdownButtonFormField<String>(
-                initialValue: _sexualOrientation,
-                isExpanded: true,
-                icon: Icon(Icons.expand_more, size: 18, color: chQuiet(context)),
-                style: TextStyle(
-                    fontSize: 13,
-                    color: Theme.of(context).colorScheme.onSurface),
-                decoration: chInput(context, label: '性取向', dense: true),
-                items: _dropdownItems(sexualOrientationPresets, _sexualOrientation),
-                onChanged: (v) => setState(() => _sexualOrientation = v!),
-              ),
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            initialValue: _sexualOrientation,
+            isExpanded: true,
+            icon: Icon(Icons.expand_more, size: 18, color: chQuiet(context)),
+            style: TextStyle(
+              fontSize: 13,
+              color: Theme.of(context).colorScheme.onSurface,
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: DropdownButtonFormField<String>(
-                initialValue: _romanticOrientation,
-                isExpanded: true,
-                icon: Icon(Icons.expand_more, size: 18, color: chQuiet(context)),
-                style: TextStyle(
-                    fontSize: 13,
-                    color: Theme.of(context).colorScheme.onSurface),
-                decoration: chInput(context, label: '浪漫取向', dense: true),
-                items: _dropdownItems(
-                    romanticOrientationPresets, _romanticOrientation),
-                onChanged: (v) => setState(() => _romanticOrientation = v!),
-              ),
-            ),
-          ],
+            decoration: chInput(context, label: '性取向', dense: true),
+            items: _dropdownItems(sexualOrientationPresets, _sexualOrientation),
+            onChanged: (v) => setState(() => _sexualOrientation = v!),
+          ),
         ),
-      );
+        const SizedBox(width: 10),
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            initialValue: _romanticOrientation,
+            isExpanded: true,
+            icon: Icon(Icons.expand_more, size: 18, color: chQuiet(context)),
+            style: TextStyle(
+              fontSize: 13,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+            decoration: chInput(context, label: '浪漫取向', dense: true),
+            items: _dropdownItems(
+              romanticOrientationPresets,
+              _romanticOrientation,
+            ),
+            onChanged: (v) => setState(() => _romanticOrientation = v!),
+          ),
+        ),
+      ],
+    ),
+  );
 
   Widget _intimacyField() => Padding(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _miniLabel('亲密偏好 · 可多选'),
-            const SizedBox(height: 4),
-            Text(
-              '按类目展开，只勾你在意的几项；留空不影响开局。',
-              style: TextStyle(
-                fontSize: 11,
-                height: 1.4,
-                color: chQuiet(context).withValues(alpha: 0.75),
-              ),
-            ),
-            const SizedBox(height: 4),
-            // 六类几十个标签全铺开就是一面「标签墙」，扫读成本极高。
-            // 每组收成一行：组名 + 已选摘要 + 计数，点开才铺标签。
-            for (final entry in intimacyPreferenceGroups.entries)
-              _intimacyGroup(entry.key, entry.value),
-          ],
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _miniLabel('亲密偏好 · 可多选'),
+        const SizedBox(height: 4),
+        Text(
+          '按类目展开，只勾你在意的几项；留空不影响开局。',
+          style: TextStyle(
+            fontSize: 11,
+            height: 1.4,
+            color: chQuiet(context).withValues(alpha: 0.75),
+          ),
         ),
-      );
+        const SizedBox(height: 4),
+        // 六类几十个标签全铺开就是一面「标签墙」，扫读成本极高。
+        // 每组收成一行：组名 + 已选摘要 + 计数，点开才铺标签。
+        for (final entry in intimacyPreferenceGroups.entries)
+          _intimacyGroup(entry.key, entry.value),
+      ],
+    ),
+  );
 
   Widget _intimacyGroup(String title, List<String> tags) {
     final cs = Theme.of(context).colorScheme;
@@ -517,8 +570,9 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         InkWell(
-          onTap: () => setState(() =>
-              open ? _openGroups.remove(title) : _openGroups.add(title)),
+          onTap: () => setState(
+            () => open ? _openGroups.remove(title) : _openGroups.add(title),
+          ),
           borderRadius: BorderRadius.circular(10),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(2, 9, 2, 9),
@@ -551,8 +605,10 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
                 if (picked.isNotEmpty) ...[
                   const SizedBox(width: 6),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 1,
+                    ),
                     decoration: BoxDecoration(
                       color: cs.primary.withValues(alpha: 0.09),
                       borderRadius: BorderRadius.circular(999),
@@ -592,13 +648,17 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
                     spacing: 6,
                     runSpacing: 6,
                     children: tags
-                        .map((tag) => _tagChip(
-                              tag,
-                              _intimacyPrefs.contains(tag),
-                              (sel) => setState(() => sel
+                        .map(
+                          (tag) => _tagChip(
+                            tag,
+                            _intimacyPrefs.contains(tag),
+                            (sel) => setState(
+                              () => sel
                                   ? _intimacyPrefs.add(tag)
-                                  : _intimacyPrefs.remove(tag)),
-                            ))
+                                  : _intimacyPrefs.remove(tag),
+                            ),
+                          ),
+                        )
                         .toList(),
                   ),
                 )
@@ -610,36 +670,36 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
   }
 
   Widget _worldviewField() => Padding(
-        padding: const EdgeInsets.only(top: 18, bottom: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    padding: const EdgeInsets.only(top: 18, bottom: 4),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _miniLabel('世界观基调'),
+        const SizedBox(height: 8),
+        Row(
           children: [
-            _miniLabel('世界观基调'),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _worldviewTile(
-                    value: 'realistic',
-                    icon: Icons.wb_sunny_outlined,
-                    label: '常规写实',
-                    caption: '无血脉与宿命，人生由选择决定',
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _worldviewTile(
-                    value: 'fantasy',
-                    icon: Icons.auto_awesome_outlined,
-                    label: '非常规幻想',
-                    caption: '灵脉 / 血脉 / 宿命等奇幻体系',
-                  ),
-                ),
-              ],
+            Expanded(
+              child: _worldviewTile(
+                value: 'realistic',
+                icon: Icons.wb_sunny_outlined,
+                label: '常规写实',
+                caption: '无血脉与宿命，人生由选择决定',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _worldviewTile(
+                value: 'fantasy',
+                icon: Icons.auto_awesome_outlined,
+                label: '非常规幻想',
+                caption: '灵脉 / 血脉 / 宿命等奇幻体系',
+              ),
             ),
           ],
         ),
-      );
+      ],
+    ),
+  );
 
   Widget _worldviewTile({
     required String value,
@@ -657,7 +717,9 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
         curve: Curves.easeOut,
         padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
         decoration: BoxDecoration(
-          color: selected ? cs.primary.withValues(alpha: 0.06) : Colors.transparent,
+          color: selected
+              ? cs.primary.withValues(alpha: 0.06)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: selected
@@ -671,8 +733,11 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
           children: [
             Row(
               children: [
-                Icon(icon,
-                    size: 16, color: selected ? cs.primary : chQuiet(context)),
+                Icon(
+                  icon,
+                  size: 16,
+                  color: selected ? cs.primary : chQuiet(context),
+                ),
                 const SizedBox(width: 6),
                 Text(
                   label,
@@ -700,25 +765,25 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
   }
 
   Widget _ageControls() => Padding(
-        padding: const EdgeInsets.only(top: 18),
-        child: Column(
-          children: [
-            _field('age'),
-            _switchRow(
-              title: '隐藏年龄',
-              caption: '底层档案继续更新，剧情不强行口述展示年龄。',
-              value: _ageHidden,
-              onChanged: (v) => setState(() => _ageHidden = v),
-            ),
-            _switchRow(
-              title: '冻结年龄',
-              caption: '开启后停止自动增长，维持当前年龄不变。',
-              value: _ageFrozen,
-              onChanged: (v) => setState(() => _ageFrozen = v),
-            ),
-          ],
+    padding: const EdgeInsets.only(top: 18),
+    child: Column(
+      children: [
+        _field('age'),
+        _switchRow(
+          title: '隐藏年龄',
+          caption: '底层档案继续更新，剧情不强行口述展示年龄。',
+          value: _ageHidden,
+          onChanged: (v) => setState(() => _ageHidden = v),
         ),
-      );
+        _switchRow(
+          title: '冻结年龄',
+          caption: '开启后停止自动增长，维持当前年龄不变。',
+          value: _ageFrozen,
+          onChanged: (v) => setState(() => _ageFrozen = v),
+        ),
+      ],
+    ),
+  );
 
   Widget _switchRow({
     required String title,
@@ -726,71 +791,73 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
     required bool value,
     required ValueChanged<bool> onChanged,
   }) => Padding(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(fontSize: 12.5)),
-                  const SizedBox(height: 2),
-                  Text(
-                    caption,
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      height: 1.35,
-                      color: chQuiet(context).withValues(alpha: 0.8),
-                    ),
-                  ),
-                ],
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontSize: 12.5)),
+              const SizedBox(height: 2),
+              Text(
+                caption,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  height: 1.35,
+                  color: chQuiet(context).withValues(alpha: 0.8),
+                ),
               ),
-            ),
-            Switch(
-              value: value,
-              onChanged: onChanged,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-          ],
-        ),
-      );
-
-  Widget _hiddenFieldsSection() => Padding(
-        padding: const EdgeInsets.only(top: 14, bottom: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _miniLabel('隐藏字段 · 不强行推断展示'),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: const ['orientation', 'intimacy', 'userPersona']
-                  .map((k) => _tagChip(
-                        _hiddenLabel(k),
-                        _hiddenFields.contains(k),
-                        (sel) => setState(() => sel
-                            ? _hiddenFields.add(k)
-                            : _hiddenFields.remove(k)),
-                      ))
-                  .toList(),
-            ),
-          ],
-        ),
-      );
-
-  Widget _miniLabel(String text) => Padding(
-        padding: const EdgeInsets.only(left: 2, top: 6),
-        child: Text(
-          text,
-          style: TextStyle(
-            fontSize: 11.5,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.2,
-            color: chQuiet(context).withValues(alpha: 0.9),
+            ],
           ),
         ),
-      );
+        Switch(
+          value: value,
+          onChanged: onChanged,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ],
+    ),
+  );
+
+  Widget _hiddenFieldsSection() => Padding(
+    padding: const EdgeInsets.only(top: 14, bottom: 4),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _miniLabel('隐藏字段 · 不强行推断展示'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: const ['orientation', 'intimacy', 'userPersona']
+              .map(
+                (k) => _tagChip(
+                  _hiddenLabel(k),
+                  _hiddenFields.contains(k),
+                  (sel) => setState(
+                    () => sel ? _hiddenFields.add(k) : _hiddenFields.remove(k),
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+      ],
+    ),
+  );
+
+  Widget _miniLabel(String text) => Padding(
+    padding: const EdgeInsets.only(left: 2, top: 6),
+    child: Text(
+      text,
+      style: TextStyle(
+        fontSize: 11.5,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.2,
+        color: chQuiet(context).withValues(alpha: 0.9),
+      ),
+    ),
+  );
 
   /// 发丝描边小标签：选中只浮一点主色底，不用整块填充。
   Widget _tagChip(String tag, bool selected, ValueChanged<bool> onSelected) {
@@ -802,7 +869,9 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
         duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? cs.primary.withValues(alpha: 0.08) : Colors.transparent,
+          color: selected
+              ? cs.primary.withValues(alpha: 0.08)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
             color: selected
@@ -824,27 +893,52 @@ class _RoleCreatePageState extends State<RoleCreatePage> {
   }
 
   String _hiddenLabel(String k) => {
-        'orientation': '隐藏取向',
-        'intimacy': '隐藏亲密偏好',
-        'userPersona': '隐藏相处人设',
-      }[k]!;
+    'orientation': '隐藏取向',
+    'intimacy': '隐藏亲密偏好',
+    'userPersona': '隐藏相处人设',
+  }[k]!;
 
-  Widget _field(String f) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: TextField(
-          controller: _form[f],
-          style: const TextStyle(fontSize: 13, height: 1.5),
-          decoration: chInput(context, label: _label(f)),
-          maxLines: f == 'background' || f == 'worldSetting' ? 3 : 1,
-          minLines: f == 'background' || f == 'worldSetting' ? 3 : 1,
-        ),
-      );
+  Widget _field(String f) {
+    final multi = f == 'background' || f == 'worldSetting' || f == 'appearance';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _form[f],
+            style: const TextStyle(fontSize: 13, height: 1.5),
+            decoration: chInput(context, label: _label(f)),
+            maxLines: multi ? 3 : 1,
+            minLines: multi ? 3 : 1,
+          ),
+          if (f == 'appearance')
+            Padding(
+              padding: const EdgeInsets.only(top: 5, left: 4),
+              child: Text(
+                '这段描述会驱动 3D 造型。${AppearanceParser.supportedHint}'
+                '结果是程序化造型，不是写实建模。',
+                style: TextStyle(fontSize: 10.5, color: chQuiet(context)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   String _label(String f) => {
-        'name': '昵称', 'age': '年龄', 'identity': '身份/职业',
-        'personality': '性格标签', 'speakStyle': '说话风格/口癖',
-        'likes': '喜好', 'dislikes': '厌恶', 'background': '背景故事',
-        'worldSetting': '世界观', 'relationBase': '与用户关系基底',
-        'taboos': '禁忌红线', 'userPersona': '用户相处人设',
-      }[f]!;
+    'name': '昵称',
+    'age': '年龄',
+    'identity': '身份/职业',
+    'personality': '性格标签',
+    'speakStyle': '说话风格/口癖',
+    'likes': '喜好',
+    'dislikes': '厌恶',
+    'background': '背景故事',
+    'worldSetting': '世界观',
+    'relationBase': '与用户关系基底',
+    'taboos': '禁忌红线',
+    'userPersona': '用户相处人设',
+    'appearance': '外貌描述（驱动 3D 造型）',
+  }[f]!;
 }

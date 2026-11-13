@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  端侧模型「自托管下载源」的明文 HTTP 放行配置。
+
+  背景：Android 9 (API 28) 起默认禁止所有明文 HTTP 流量，回环地址 127.0.0.1
+  同样被拦。lib/data/model_downloader.dart 需要从用户自托管源
+  （tools/gguf_server.py，典型地址 http://127.0.0.1:8080 或 http://192.168.x.x:8080）
+  拉取 manifest.json 与模型文件。不放行时每个源都只报「清单拉取失败」，
+  在 App 里表现为「模型怎么都下载不了」。
+
+  同样的回环明文还被 3D 查看器依赖：flutter_3d_controller 在 App 内用
+  HttpServer.bind(loopbackIPv4, 0) 起随机端口，WebView 通过
+  http://127.0.0.1:<port>/ 加载 model-viewer 与 GLB。没有这条放行，
+  Android 16 上 WebView 会直接 ERR_CLEARTEXT_NOT_PERMITTED，高精 3D 白屏。
+
+  安全边界与已知债务（如实记录，不粉饰）：
+  * base-config 是「全域」明文放行，不只放行回环地址，这一点比上面的用途
+    描述更宽。当前之所以保留，是为了同时兼容用户可能填写的局域网自托管源
+    （http://192.168.x.x:8080）以及插件的随机端口。
+  * App 不通过明文传输任何用户数据；下载器已有：纯文件名校验（防目录穿越）、
+    逐跳同源判定（Bearer Token 不会外发到第三方）、SHA-256 流式校验
+    （防篡改/损坏）、大小与超时限制。
+  * 生产部署应改用 HTTPS 证书，并把本文件收紧为按域名的 domain-config
+    白名单（至少包含 127.0.0.1 与 localhost），不要继续全域放行。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -34,7 +34,11 @@ import android.os.IBinder
  */
 class CompanionOverlayService : Service() {
 
-    private val overlay = CompanionOverlay(this)
+    // 不能在字段初始化时构造：Service 的字段先于 attachBaseContext 执行，
+    // 此时 getSystemService(WINDOW_SERVICE) 返回 null，CompanionOverlay 构造
+    // 里一取就 NPE —— 只要服务被创建必崩（release 冷启动实测）。
+    // 移到 onCreate() 之后，Context 才完整可用。
+    private lateinit var overlay: CompanionOverlay
     private var foregroundStarted = false
 
     /** 最近一次 SHOW 的参数，用于进程回收后恢复。 */
@@ -44,6 +48,7 @@ class CompanionOverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        overlay = CompanionOverlay(this)
         createNotificationChannel()
         isRunning = true
     }
@@ -156,7 +161,9 @@ class CompanionOverlayService : Service() {
     }
 
     override fun onDestroy() {
-        overlay.hide()
+        // 极端路径下 onCreate 可能尚未完成（服务立刻被停止），避免反手抛
+        // UninitializedPropertyAccessException 把原本的收尾流程带崩。
+        if (::overlay.isInitialized) overlay.hide()
         foregroundStarted = false
         isRunning = false
         super.onDestroy()

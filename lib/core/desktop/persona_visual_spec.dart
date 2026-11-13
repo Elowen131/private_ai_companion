@@ -29,6 +29,9 @@ class PersonaVisualSpec {
     required this.relationBase,
     required this.taboos,
     required this.idleLine,
+    // 默认空串：`LifeAvatarService.visualSpecFor` 等「宠物/孩子等价规格」
+    // 并不来自 Persona 卡，不该被迫提供一个外貌描述。
+    this.appearance = '',
     required this.fingerprint,
     required this.warmth,
     required this.pride,
@@ -59,6 +62,10 @@ class PersonaVisualSpec {
   /// 去掉开头的「（）」动作描写，保留角色本人会说的话。
   final String idleLine;
 
+  /// 用户手写的**外貌描述**（可为空）。3D 造型工坊 / 一键生成会把它解析成
+  /// 造型参数；解析是本地确定性关键词规则，不联网、不调用生成模型。
+  final String appearance;
+
   final String fingerprint;
 
   /// 0~1，温柔 / 傲娇 / 好奇，驱动表情幅度与动作频率。
@@ -82,20 +89,25 @@ class PersonaVisualSpec {
   final int blinkEveryMs;
 
   /// 参与视觉推导的字段串，改动任一字段都会让指纹失效。
+  ///
+  /// `appearance` **只在非空时**追加：老角色没写过外貌描述时指纹与历史版本
+  /// 完全一致，已落盘的 GLB / 形象缓存不会被无谓作废；一旦写了描述，指纹
+  /// 立刻变化，工坊与一键生成都会重建形象——这正是「改外貌即改造型」所需。
   static String fingerprintSource(Persona p) => [
-        p.name,
-        p.gender,
-        p.age.toString(),
-        p.identity,
-        p.personality.join(','),
-        p.speakStyle,
-        p.likes,
-        p.dislikes,
-        p.background,
-        p.worldSetting,
-        p.relationBase,
-        p.taboos,
-      ].join('|');
+    p.name,
+    p.gender,
+    p.age.toString(),
+    p.identity,
+    p.personality.join(','),
+    p.speakStyle,
+    p.likes,
+    p.dislikes,
+    p.background,
+    p.worldSetting,
+    p.relationBase,
+    p.taboos,
+    if (p.appearance.trim().isNotEmpty) 'appearance:${p.appearance.trim()}',
+  ].join('|');
 
   static String fingerprintOf(Persona p) =>
       sha256.convert(utf8.encode(fingerprintSource(p))).toString();
@@ -114,22 +126,23 @@ class PersonaVisualSpec {
     final close = _has(relation, const ['青梅竹马', '亲密', '恋人', '知己', '家人']);
 
     // 服装只从「身份 / 关系」推大类，不凭空指定颜色、品牌、发型长度等卡片外设定。
-    final outfit = _has(identity, const ['邻家', '熬夜', '居家', '陪伴', '邻居']) ||
+    final outfit =
+        _has(identity, const ['邻家', '熬夜', '居家', '陪伴', '邻居']) ||
             _has(relation, const ['青梅竹马', '邻里'])
         ? 'cozyKnit'
         : _has(identity, const ['学生', '校园'])
-            ? 'campus'
-            : _has(identity, const ['职场', '医生', '律师', '教师', '总裁'])
-                ? 'workwear'
-                : 'everyday';
+        ? 'campus'
+        : _has(identity, const ['职场', '医生', '律师', '教师', '总裁'])
+        ? 'workwear'
+        : 'everyday';
 
     // 示范对话是用户给的「角色原话」，去掉（）动作后作为待机台词；
     // 没有人设自带头绪就留空，绝不替角色编一句话。
     final idle = p.fewshot.isEmpty
         ? ''
         : (p.fewshot.first['char'] ?? '')
-            .replaceAll(RegExp(r'^[（(][^）)]*[）)]\s*'), '')
-            .trim();
+              .replaceAll(RegExp(r'^[（(][^）)]*[）)]\s*'), '')
+              .trim();
 
     return PersonaVisualSpec(
       name: p.name,
@@ -145,6 +158,7 @@ class PersonaVisualSpec {
       relationBase: relation,
       taboos: p.taboos,
       idleLine: idle,
+      appearance: p.appearance,
       fingerprint: fingerprintOf(p),
       warmth: _has(personality, const ['温柔', '体贴', '软', '治愈']) ? 0.9 : 0.55,
       pride: _has(personality, const ['傲娇', '别扭', '嘴硬']) ? 0.7 : 0.2,
@@ -170,31 +184,32 @@ class PersonaVisualSpec {
 
   /// 供悬浮窗跨 isolate / 原生通道传参（只传基础类型）。
   Map<String, dynamic> toMap() => {
-        'name': name,
-        'gender': gender,
-        'age': age,
-        'identity': identity,
-        'personality': personality,
-        'speakStyle': speakStyle,
-        'likes': likes,
-        'dislikes': dislikes,
-        'background': background,
-        'worldSetting': worldSetting,
-        'relationBase': relationBase,
-        'taboos': taboos,
-        'idleLine': idleLine,
-        'fingerprint': fingerprint,
-        'warmth': warmth,
-        'pride': pride,
-        'curiosity': curiosity,
-        'starMotif': starMotif,
-        'cocoaMotif': cocoaMotif,
-        'radioMotif': radioMotif,
-        'whimsicalWarm': whimsicalWarm,
-        'relationClose': relationClose,
-        'outfit': outfit,
-        'blinkEveryMs': blinkEveryMs,
-      };
+    'name': name,
+    'gender': gender,
+    'age': age,
+    'identity': identity,
+    'personality': personality,
+    'speakStyle': speakStyle,
+    'likes': likes,
+    'dislikes': dislikes,
+    'background': background,
+    'worldSetting': worldSetting,
+    'relationBase': relationBase,
+    'taboos': taboos,
+    'idleLine': idleLine,
+    'appearance': appearance,
+    'fingerprint': fingerprint,
+    'warmth': warmth,
+    'pride': pride,
+    'curiosity': curiosity,
+    'starMotif': starMotif,
+    'cocoaMotif': cocoaMotif,
+    'radioMotif': radioMotif,
+    'whimsicalWarm': whimsicalWarm,
+    'relationClose': relationClose,
+    'outfit': outfit,
+    'blinkEveryMs': blinkEveryMs,
+  };
 
   factory PersonaVisualSpec.fromMap(Map<dynamic, dynamic> m) {
     double d(String k, double fallback) =>
@@ -215,6 +230,7 @@ class PersonaVisualSpec {
       relationBase: s('relationBase'),
       taboos: s('taboos'),
       idleLine: s('idleLine'),
+      appearance: s('appearance'),
       fingerprint: s('fingerprint'),
       warmth: d('warmth', 0.55),
       pride: d('pride', 0.2),
@@ -268,8 +284,14 @@ class PersonaVisualSpec {
       'Likes: $likes. Dislikes: $dislikes.',
       'Background: $background. World: $worldSetting.',
       'Relationship with the user: $relationBase.',
-      if (relationClose) 'Eye-level close comfortable framing, relaxed posture.',
-      'Natural dark hair and natural everyday features, no invented costume details.',
+      if (relationClose)
+        'Eye-level close comfortable framing, relaxed posture.',
+      // 用户写了外貌就必须以它为准；旧版在这里写死「自然深色头发」，会把
+      // 「银发蓝眼」之类的描述直接覆盖掉，是描述链路失效的原因之一。
+      if (appearance.trim().isNotEmpty)
+        'Appearance (from the persona card, follow exactly): ${appearance.trim()}.'
+      else
+        'Natural dark hair and natural everyday features, no invented costume details.',
       if (expression.isNotEmpty) 'Expression: $expression.',
       'Outfit: $outfitDesc. No formal wear, no uniform, no glamour, no fantasy armor.',
       if (motifs.isNotEmpty) 'Scene motifs: ${motifs.join(', ')}.',

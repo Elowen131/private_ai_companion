@@ -35,13 +35,17 @@ class Persona {
   final String worldview; // 'realistic' | 'fantasy'
   /// 年龄隐藏：底层档案继续更新，剧情不强行口述展示年龄。
   final bool ageHidden;
+
   /// 年龄冻结：开启后停止自动增长，维持当前年龄不变。
   final bool ageFrozen;
+
   /// 是否在本次会话被移入「隐私空间」：客厅列表、角色管理、日记与档案锁的
   /// 角色下拉默认都不列出它，只有通过隐私空间的二次验证后才显形。
   final bool hiddenInApp;
+
   /// 隐藏字段集：被隐藏的字段不强行推断展示，剧情自动适配隐藏设定。
   final List<String> hiddenFields;
+
   /// 扩展字段容器：性取向、浪漫取向、亲密偏好、用户相处人设、遗传体质等。
   final Map<String, dynamic> ext;
 
@@ -91,6 +95,14 @@ class Persona {
   List<String> get intimacyPrefs => _extList('intimacyPrefs');
   String get userPersona => _extStr('userPersona');
 
+  /// 外貌自由描述（用户手写，如「银色长发、蓝眼、圆脸、身形高挑」）。
+  ///
+  /// 存在 `ext` 里而**不新增数据库列**：老库无需迁移即可读写，降级安装也不会
+  /// 读错列。该字段是「描述 → 3D 造型」链路的唯一输入，见
+  /// `core/avatar3d/appearance_parser.dart`；同时会参与 `PersonaVisualSpec`
+  /// 的指纹，改动描述即触发形象重建。
+  String get appearance => _extStr('appearance');
+
   // 写实：体质特质 / 遗传特征（后天塑造为主）
   List<String> get physiqueTraits => _extList('physiqueTraits');
   List<String> get geneticTraits => _extList('geneticTraits');
@@ -116,13 +128,13 @@ class Persona {
 
   /// 供 WorldRules.worldviewViolations 使用的幻想字段快照。
   Map<String, dynamic> fantasyFieldSnapshot() => {
-        'bloodlineTier': bloodlineTier,
-        'elementAffinity': elementAffinity,
-        'innateTalent': innateTalent,
-        'spiritVein': spiritVein,
-        'raceTrait': raceTrait,
-        'fateBond': fateBond,
-      };
+    'bloodlineTier': bloodlineTier,
+    'elementAffinity': elementAffinity,
+    'innateTalent': innateTalent,
+    'spiritVein': spiritVein,
+    'raceTrait': raceTrait,
+    'fateBond': fateBond,
+  };
 
   /// copyWith 的哨兵：用于区分「这个字段不修改」与「显式把它清空（null）」。
   /// 头像 / 聊天背景都必须支持「恢复默认」，所以不能简单用 `String?` 参数。
@@ -157,8 +169,9 @@ class Persona {
     int? updatedAt,
   }) {
     // ext 合并：非 null 时浅合并，便于只改单个扩展字段。
-    final Map<String, dynamic> mergedExt =
-        ext == null ? Map.from(this.ext) : {...this.ext, ...ext};
+    final Map<String, dynamic> mergedExt = ext == null
+        ? Map.from(this.ext)
+        : {...this.ext, ...ext};
     return Persona(
       id: id ?? this.id,
       name: name ?? this.name,
@@ -194,34 +207,36 @@ class Persona {
   }
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'name': name,
-        'gender': gender,
-        'age': age,
-        'identity': identity,
-        'personality': jsonEncode(personality),
-        'speak_style': speakStyle,
-        'likes': likes,
-        'dislikes': dislikes,
-        'background': background,
-        'world_setting': worldSetting,
-        'relation_base': relationBase,
-        'taboos': taboos,
-        'fewshot': jsonEncode(fewshot),
-        'avatar_path': avatarPath,
-        'bg_path': bgPath,
-        'qmodel_path': qmodelPath,
-        'worldview': worldview,
-        'age_hidden': ageHidden ? 1 : 0,
-        'age_frozen': ageFrozen ? 1 : 0,
-        'hidden_in_app': hiddenInApp ? 1 : 0,
-        'ext': jsonEncode(hiddenFields.isEmpty && ext.isEmpty
-            ? {}
-            : {'hiddenFields': hiddenFields, ...ext}),
-        'persona_version': personaVersion,
-        'created_at': createdAt,
-        'updated_at': updatedAt,
-      };
+    'id': id,
+    'name': name,
+    'gender': gender,
+    'age': age,
+    'identity': identity,
+    'personality': jsonEncode(personality),
+    'speak_style': speakStyle,
+    'likes': likes,
+    'dislikes': dislikes,
+    'background': background,
+    'world_setting': worldSetting,
+    'relation_base': relationBase,
+    'taboos': taboos,
+    'fewshot': jsonEncode(fewshot),
+    'avatar_path': avatarPath,
+    'bg_path': bgPath,
+    'qmodel_path': qmodelPath,
+    'worldview': worldview,
+    'age_hidden': ageHidden ? 1 : 0,
+    'age_frozen': ageFrozen ? 1 : 0,
+    'hidden_in_app': hiddenInApp ? 1 : 0,
+    'ext': jsonEncode(
+      hiddenFields.isEmpty && ext.isEmpty
+          ? {}
+          : {'hiddenFields': hiddenFields, ...ext},
+    ),
+    'persona_version': personaVersion,
+    'created_at': createdAt,
+    'updated_at': updatedAt,
+  };
 
   factory Persona.fromMap(Map<String, dynamic> m) {
     final rawExt = m['ext'] as String?;
@@ -237,9 +252,7 @@ class Persona {
     // 隐藏字段可从 ext.hiddenFields 取出，兼容老库（无该键时为空）。
     List<String> hidden = const [];
     if (parsedExt['hiddenFields'] is List) {
-      hidden = (parsedExt['hiddenFields'] as List)
-          .map((e) => '$e')
-          .toList();
+      hidden = (parsedExt['hiddenFields'] as List).map((e) => '$e').toList();
       parsedExt.remove('hiddenFields');
     }
     return Persona(
@@ -256,10 +269,9 @@ class Persona {
       worldSetting: m['world_setting'] as String? ?? '',
       relationBase: m['relation_base'] as String? ?? '',
       taboos: m['taboos'] as String? ?? '',
-      fewshot: decodeJsonList(m['fewshot'])
-          .whereType<Map>()
-          .map((e) => Map<String, String>.from(e))
-          .toList(),
+      fewshot: decodeJsonList(
+        m['fewshot'],
+      ).whereType<Map>().map((e) => Map<String, String>.from(e)).toList(),
       avatarPath: m['avatar_path'] as String?,
       bgPath: m['bg_path'] as String?,
       qmodelPath: m['qmodel_path'] as String?,

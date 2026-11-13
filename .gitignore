@@ -109,3 +109,12 @@ firebase.json
 /linux/flutter/generated_plugin_registrant.*
 web/icons/Icon-*.png
 .web/
+
+# ---------------------------------------------------------------------------
+# 外置模型 / 高精 3D 资产：本机自托管源的「内容」，不是源码资产
+# tools/gguf_models/ 内含 GGUF 链路自检文件、两份高精人形 GLB（约 80 MB）
+# 与 pets/ 下三份 CC0 宠物示例 GLB（约 0.45 MB），
+# 运行时按需下载到应用私有目录，绝不打进 APK，也不应提交进仓库。
+# 服务端脚本 tools/gguf_server.py 与清单逻辑仍然入库。
+# ---------------------------------------------------------------------------
+/tools/gguf_models/

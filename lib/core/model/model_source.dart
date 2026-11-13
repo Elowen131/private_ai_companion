@@ -96,28 +96,37 @@ class ModelSource {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'baseUrl': baseUrl,
-        'manifestPath': manifestPath,
-        'apiToken': apiToken,
-        'builtIn': builtIn,
-      };
+    'id': id,
+    'name': name,
+    'baseUrl': baseUrl,
+    'manifestPath': manifestPath,
+    'apiToken': apiToken,
+    'builtIn': builtIn,
+  };
 
   factory ModelSource.fromJson(Map<String, dynamic> j) => ModelSource(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        baseUrl: j['baseUrl'] as String,
-        manifestPath: (j['manifestPath'] as String?) ?? '/manifest.json',
-        apiToken: j['apiToken'] as String?,
-        builtIn: (j['builtIn'] as bool?) ?? false,
-      );
+    id: j['id'] as String,
+    name: j['name'] as String,
+    baseUrl: j['baseUrl'] as String,
+    manifestPath: (j['manifestPath'] as String?) ?? '/manifest.json',
+    apiToken: j['apiToken'] as String?,
+    builtIn: (j['builtIn'] as bool?) ?? false,
+  );
 
-  /// 内置兜底源：指向占位示例域名，仅用于演示 UI 流程，不会真实可下。
+  /// 内置默认源：指向**本机自托管下载服务**（tools/gguf_server.py）。
+  ///
+  /// 旧实现写死 `https://models.example.com`（占位示例域名，永远连不上），
+  /// 用户打开「模型源与下载」只会看到「清单拉取失败」，误以为下载功能坏了。
+  /// 改成回环地址后：PC 上启动 gguf_server.py，再做
+  /// `adb reverse tcp:8080 tcp:8080`，手机上的 127.0.0.1:8080 即指向 PC，
+  /// 内置源立刻可用；USB 直连也绕开了企业 Wi-Fi 客户端隔离（局域网 IP 互不可达）。
+  ///
+  /// 服务未启动时 UI 会给出具体启动步骤，而不是抛一串异常。
+  /// 需要 NAS / 公网源时，仍可用「添加自托管源」填自己的地址。
   static const ModelSource builtInSource = ModelSource(
     id: 'builtin',
-    name: '内置示例源（占位）',
-    baseUrl: 'https://models.example.com',
+    name: '本机自托管源（127.0.0.1:8080）',
+    baseUrl: 'http://127.0.0.1:8080',
     builtIn: true,
   );
 }
@@ -156,9 +165,11 @@ class ModelSourceStore {
         final list = jsonDecode(f.readAsStringSync()) as List;
         _userSources
           ..clear()
-          ..addAll(list
-              .map((e) => ModelSource.fromJson(e as Map<String, dynamic>))
-              .where((s) => ModelSource.isValidBaseUrl(s.baseUrl)));
+          ..addAll(
+            list
+                .map((e) => ModelSource.fromJson(e as Map<String, dynamic>))
+                .where((s) => ModelSource.isValidBaseUrl(s.baseUrl)),
+          );
       } catch (_) {
         // 损坏则忽略，从空开始
       }
@@ -167,13 +178,10 @@ class ModelSourceStore {
 
   Future<void> _save() {
     // onError 吞掉上一次写失败，避免一次 IO 异常让之后所有保存都连锁失败。
-    _saveChain = _saveChain.then<void>(
-      (_) async {
-        final payload = jsonEncode(_userSources.map((s) => s.toJson()).toList());
-        await writeAtomic(File(_sourcesFile()), payload);
-      },
-      onError: (Object _, StackTrace _) {},
-    );
+    _saveChain = _saveChain.then<void>((_) async {
+      final payload = jsonEncode(_userSources.map((s) => s.toJson()).toList());
+      await writeAtomic(File(_sourcesFile()), payload);
+    }, onError: (Object _, StackTrace _) {});
     return _saveChain;
   }
 
@@ -189,7 +197,8 @@ class ModelSourceStore {
     final trimmedUrl = baseUrl.trim();
     if (!ModelSource.isValidBaseUrl(trimmedUrl)) {
       throw const ModelSourceException(
-          '根地址必须是带主机名的 http/https 地址，例如 http://192.168.1.10:8080');
+        '根地址必须是带主机名的 http/https 地址，例如 http://192.168.1.10:8080',
+      );
     }
     final token = apiToken?.trim();
     if (!ModelSource.isValidToken(token)) {

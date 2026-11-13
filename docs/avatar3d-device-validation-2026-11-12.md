@@ -48,12 +48,35 @@
 - `flutter pub get` 因代理 `pub.dev 502` 失败，但依赖缓存完整，`flutter build apk --debug` 仍成功（133.8s）→ `app-debug.apk` 324 MB / 20:58，含 arm64-v8a / armeabi-v7a / x86_64，已确认内含 `model_viewer.min.js`（931,829 B）与模板。
 - 为降低 USB 传输量另建 `flutter build apk --release --split-per-abi --target-platform android-arm64`（224.4s）→ **`app-arm64-v8a-release.apk` 53.4 MB / 21:12**，推荐用于装机。
 
-**安装受阻（USB 链路，需用户手机侧操作）**：
-- 真机 adb 连接不稳定：沙箱每次命令重启 adb daemon，设备反复 `offline` / `not found`。
-- **实测结论：USB 链路持续大流量即掉线，不是安装权限问题**（修正上一版「疑似小米 USB 安装保护」的误判）。本轮分别用 324MB 全 ABI debug 包与新建的 **53.4MB arm64 release 包**执行 `adb install -r`，均在 `Performing Streamed Install` 后失败（错误码为空 + `device offline`）；改用 PowerShell 原生调用 adb 结果相同，**排除 Git Bash MSYS 路径转换**（§3.1 记录的路径问题不是本次主因）。与 §3.1 的 325MB / 133MB / 8MB 分块实测一致 → **USB 装机路径判定不可用**。
-- **后续只能走非 USB 大流量路径**（按 §3.1 建议）：① **MTP 手动复制**：把 `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`（53.4MB，21:12 最新代码）拖进手机 `Download/`，在手机上点击安装（需允许「未知来源」）；② **无线 adb**：开发者选项 →「无线调试」→「使用配对码配对设备」，把 IP:端口与 6 位配对码给我，我来 `adb pair` / `adb connect`；③ 换原装数据线 / 主板后置 USB 2.0 口、手机保持解锁亮屏；④ 在能直连 GitHub 的网络下载 CI run `43209821779` 的 `app-release-bundle`（51.68MB APK）侧载。
-- 装好后 adb 只剩 `am start` / `logcat` / `screencap` 等**小流量**命令，链路稳定，可按 §4 继续自动验证。
-- **模拟器已排除**：`emulator-5554` 是腾讯云手机实例，安装成功但系统 `ActivityManager: BLOCK ... top-activity start` 直接禁止启动第三方应用，且为 x86_64（项目 native 库偏 arm64）。不必再试。
+**安装受阻（已定位根因并解决 —— 修正此前误判）**：
+- 此前把 `Performing Streamed Install` 后的 `device offline` / 空错误码归因为「USB 大流量链路掉线」，**这个结论是错的**。真因：本环境**每次 adb 命令结束都会清理 adb daemon**（每条命令都打印 `* daemon not running; starting now`），而 `adb install` 的实际安装由 daemon 在后台完成，daemon 被杀导致 Streamed Install 中途被中断。
+- 解决：先起一个长驻后台任务执行 `adb start-server` 保活 daemon，再在另一条命令里安装。实测 `adb -s d641192 install -r app-arm64-v8a-release.apk`（53.4 MB）→ **`Success`，9.5 s**；`dumpsys package` 确认 `versionName=0.1.0`、`lastUpdateTime=2026-11-12 22:27:25`。**USB 链路本身完全可用**。
+- 结论：§3.1 的 MTP / 无线 adb / 换线等「绕开大流量」方案**不再需要**，仅作备用保留。
+
+**无线 adb 配对路径（本网络下不可用）**：
+- 用户先后提供 `172.22.9.35:39807 / 042410` 与 `172.22.9.35:45451 / 125757`，两次 `adb pair` 均返回 `protocol fault (couldn't read status message)`。
+- 诊断：PC WLAN `172.22.11.102/19`、手机 wlan0 `172.22.9.35/19`（同网段），手机 `settings get global adb_wifi_enabled = 1`；但 **PC ping 手机回「无法访问目标主机」、手机 ping PC 100% 丢包、PC ARP 表无手机条目、mDNS 只发现虚拟设备** `adb-00badbios… @172.30.100.193:5555`；TCP 探测 39807 / 45451 / 5555 / 18835 全部超时，`adb connect …:18835` 报 10060。手机连的是企业 802.1X Wi-Fi `SBS-802.1X` → 判定**客户端隔离（AP isolation）**，与配对码过期无关，换码无效。
+- 要走无线 adb 必须换网络拓扑（手机开热点给 PC 连 / 两台连同一普通家用 Wi-Fi），再重新打开配对对话框提供新 IP:端口 + 配对码。
+- 运行时禁用 service 的尝试：`pm disable <pkg>/.CompanionOverlayService` 被 `SecurityException: Shell cannot change component state` 拒绝（非 root 不能改第三方组件状态）。
+
+**截图/输入坐标坑**：`screencap` 输出为设备原生 **1236×2750**，预览显示却是 540×1200；`input tap` 必须按**原生坐标**（×2.29）。此前按预览坐标点击导致操作全部偏移、页面乱跳，是 UI 导航反复失败的原因。
+
+## 1.2 真机验证实测（22:27–22:50，release 包）
+
+设备 Xiaomi Civi 5 Pro / `25067PYE3C`，Android 16 / SDK 36 / arm64-v8a，序列号 `d641192`；包名 `com.elowen131.privateaicompanion`，version 0.1.0；网络 `SBS-802.1X`（普通用户网络、无代理）。截图与日志存于 `design/device-validation/`。
+
+| 用例 | 结果 | 证据 |
+|---|---|---|
+| T10 安装与启动 | **通过** | `install -r` Success 9.5s；冷启动 `Displayed …MainActivity +408ms`，「聊天」首屏正常渲染，无 `INSTALL_FAILED_*`、无闪退 |
+| T1b 普通网络高精加载 | **回落 → P0 坐实，阻断发布** | 新增狐物种「云狐息」进入 3D 形象页：AppBar 显示「高精」（当前风格化），形象标注 `4662 三角形 · 22 骨骼 · 20 个部件 · 幼兽`，画面为程序化形象；logcat 中 InAppWebView 创建后 **12.0 s** 被销毁（`size:0, isLoad:false`），符合 12s 看门狗回落 |
+| T5 高精↔风格化切换 ×3 | **通过** | 3 次切换后仍正常显示程序化形象，无白屏、无重复叠加、无崩溃；每次切换各创建/销毁一个 WebView（`0,0-1235,845`） |
+| T2/T3/T4/T5b/T6/T7/T8/T9 | 未执行 | T1b 已坐实 P0，按 §5 应先修 GLB 源再复验，本轮不继续铺开 |
+
+**新增发现（与 3D 管线无关的独立 P0 缺陷，仅记录未改码）**：
+- 一次冷启动后约 2 s 出现 `FATAL EXCEPTION: Unable to create service CompanionOverlayService: NullPointerException: Context.getSystemService(...) on a null object reference`，随后 `Force finishing activity MainActivity`。
+- 代码级成因确定：`CompanionOverlayService.kt:37` 的 `private val overlay = CompanionOverlay(this)` 在**字段初始化**阶段执行，此时 Service 尚未 `attachBaseContext`；`CompanionOverlay.kt:35` 立即调用 `context.getSystemService(WINDOW_SERVICE)` → 空指针。只要该 service 被创建就必崩。
+- 触发为**偶发**（悬浮窗开关默认关闭，疑为系统重投 `START_REDELIVER_INTENT` 重建 service）；后续 3 次干净冷启动均未复现，故 T10 判通过。但用户一旦开启「桌面伴生悬浮窗」即必崩，**属发布阻断级缺陷**，需单独把 overlay 创建移入 `onCreate()`。
+- **模拟器已排除**：`emulator-5554` 是腾讯云手机实例，`ActivityManager: BLOCK … top-activity start` 禁止启动第三方应用，且为 x86_64。不必再试。
 
 ## 2. 前置条件
 
@@ -154,8 +177,9 @@ GLB 首帧耗时：___ s   回落耗时：___ s
 ## 7. 发布前 Checklist 剩余项（与验收文档 §7 对齐）
 
 - [x] 确认 HEAD 代码基线对应 CI run 全绿（`43209821779`）
-- [ ] 手机侧完成 USB 调试/USB 安装授权，成功安装最新 debug 包（见 §1.1 受阻记录）
-- [ ] **本指导书全部用例执行完毕并归档**
-- [ ] 若 T1b 坐实 P0：GLB 源切换为可达 CDN，另开提交 + 重跑 CI + 复验
+- [x] 手机侧完成 USB 调试授权，成功安装 53.4 MB arm64 release 包（§1.1：daemon 保活后 9.5s `Success`）
+- [ ] **本指导书全部用例执行完毕并归档**（本轮已完成 T10 / T1b / T5；T1b 坐实 P0）
+- [x] T1b 已坐实 P0：普通网络下高精 100% 回落 → GLB 源切换为可达 CDN，另开提交 + 重跑 CI + 复验
+- [ ] 修复 `CompanionOverlayService` 构造期 NPE（§1.2，发布阻断级，独立于 3D 管线）
 - [ ] 确认 `pilotEnabled` 全局开关取值符合发布策略（当前默认 `true`）
 - [ ] 灰度推送，观察 3D 加载成功率与回落率

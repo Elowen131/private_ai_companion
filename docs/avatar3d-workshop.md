@@ -492,7 +492,10 @@ Pet.species(中文名)  →  PetCatalog.speciesIdByName  →  species id
 - 其余 101 个物种暂未登记，`forSpeciesId` 返回 null，自动走程序化兜底。
 - 生产环境应把自有/采购的 CC0 宠物 GLB 托管到**带 CORS 头的 HTTPS CDN**，并在
   `PetGlbManifest._entries` 按 species id 登记即可，无需改渲染代码。
-- 安全约定：只接受 https + CORS 远程 GLB，不启用 cleartextTraffic，保持安全姿态。
+- 安全约定（**已于 §14 修订**）：远程通道只接受 https + CORS 的 GLB。
+  原文档所写「不启用 cleartextTraffic」在 §14 之后不再成立 —— 为了让端侧自托管
+  下载源与 3D 查看器内置的回环 HttpServer 在 Android 16 上可用，已新增
+  `res/xml/network_security_config.xml`，详见 §14.6 的安全债务说明。
 
 ### 13.5 测试
 
@@ -509,3 +512,247 @@ Pet.species(中文名)  →  PetCatalog.speciesIdByName  →  species id
 - **平台**：Android/iOS/Web 稳定，macOS 为 beta；本管线面向移动端。
 - **精度**：GLB 的精度取决于资产本身（CC0 示例精度有限）；真正照片级宠物模型需
   引入高质量 CC0/自产资产，本管线已为此预留按 id 登记的扩展点。
+- **P0（真机实测，仍未修）**：普通网络下 `raw.githubusercontent.com` 不可达，
+  宠物页高精通道 12.0s 后回落程序化。修法是把清单换到可达且带 CORS 的镜像
+  （如 `gcore.jsdelivr.net` / `cdn.jsdmirror.com`）或自有 CDN。属独立提交。
+
+---
+
+## 14. 外置高精人形 GLB 通道（用户自有交付资产）
+
+### 14.1 为什么会有这一节
+
+用户明确指出 App 内 3D 造型「不写实、不像人、眼睛呢」，并对比了此前交付的
+网页版 3D viewer。核对后确认这不是调参能补的差距，而是**两套渲染架构**：
+
+| | App 内程序化 `Avatar3DView` | 网页交付版 / 本通道高精 GLB |
+|---|---|---|
+| 渲染 | 纯 Dart 逐三角形软渲染 | WebView + Google model-viewer (WebGL) |
+| 三角形 | 约 4,662 | **499,480**（标准）/ 59,988（Q 版） |
+| 顶点 | — | 303,460 / 39,551 |
+| 贴图 | 0（顶点色） | **3 张** |
+| 骨骼 / 动画 | 22 骨骼 LBS，可动 | **0 / 0，静态** |
+| 资产位置 | 代码生成，零资产 | 外置下载，48.2 MB / 30.8 MB |
+
+程序化写实档的渲染实拍（`generated_assets/style_realistic.png`）确实是纸片感低多边形，
+用户的批评成立。87 项滑杆无法把 4,662 三角形变成 50 万三角形 + 贴图。
+
+### 14.2 资产：用户自有的网页交付版同款 GLB
+
+`generated_assets/cen_youheng_3d.glb` 与 `cen_youheng_q_version.glb` 就是
+`cen_youheng_3d_viewer.html` / `cen_youheng_q_3d_viewer.html` 实际引用的资产，
+不需要外购、不涉及第三方授权。元信息（直接读 GLB JSON chunk 实测，非估算）：
+
+| id | 文件 | 字节 | SHA-256 | 三角形 | 贴图 |
+|---|---|---|---|---|---|
+| `humanoid_standard` | `cen_youheng_3d.glb` | 50,536,636 | `8c901c25…e49d` | 499,480 | 3 |
+| `humanoid_chibi` | `cen_youheng_q_version.glb` | 32,339,640 | `e2e00894…0622` | 59,988 | 3 |
+
+**诚实边界**：这两份资产是**半写实 / 风格化 3D 人形** —— 有清晰眼睛、五官、
+针织开衫与布料贴图、正常人体比例，相对程序化模型是数量级提升；但对照
+`generated_assets/cen_youheng_portrait.png`（照片级写实参考图）仍有明显差距，
+**不是照片级写实真人**。UI 里必须同步写明，不能只在文档里承认。
+
+### 14.3 为什么 `file://` 真的能用（逐行核对过插件源码）
+
+`flutter_3d_controller 2.3.0` 的移动端实现 `model_viewer_mobile.dart`：
+
+- `initState()` → `_initProxy()` → `HttpServer.bind(InternetAddress.loopbackIPv4, 0)`；
+- WebView 加载 `http://127.0.0.1:<随机端口>/`，页面由本地模板生成；
+- `_buildHTML()` 把 `<model-viewer>` 的 src **写死成 `/model`**；
+- 代理收到 `/model` 时：`Uri.parse(widget.src)`，若 `isScheme('file')` 就
+  `_readFile(url.path)` 读出字节，附 `Content-Type: application/octet-stream`
+  与 **`Access-Control-Allow-Origin: *`** 返回。
+
+所以本地 GLB 走的是 App 内回环 HTTP，**不需要外部 CORS、不需要外网**，
+`src` 传 `File.uri.toString()` 即可。这也解释了为什么必须放行回环明文流量（§14.6）。
+
+### 14.4 下载链路（复用，不重复造轮子）
+
+`HighPolyGlbStore` 把清单条目转成 `ModelInfo(kind: ModelKind.avatarGlb)` 交给既有的
+`ModelDownloader`，从而继承：纯文件名校验（防目录穿越）、HTTP Range 断点续传、
+逐跳同源鉴权、长度一致性检查、**SHA-256 流式校验**、残片死锁修复。
+落盘在 `getApplicationDocumentsDirectory()/high_poly_glb/`，卸载即清除。
+
+`ModelKind.avatarGlb` 追加在枚举末尾，保证 `ModelInfo.fromJson` 的
+`values.firstWhere(..., orElse: llm)` 对旧状态文件向后兼容。
+
+自托管源：`tools/gguf_server.py` 的 `build_manifest()` 只扫描根目录的普通文件，
+因此把两份 GLB 放在 **`tools/gguf_models/high_poly/` 子目录**：既能通过
+`/models/high_poly/<file>` 静态下载（`_safe_path()` 允许子目录、支持 Range），
+又**不会出现在模型清单里**，不会让用户在「模型源与下载」页误把 3D 资产设为
+推理模型。该目录已加入 `.gitignore`（约 80 MB 运行时资产，绝不入库/入包）。
+
+### 14.5 工坊集成与回落
+
+`avatar_studio_page.dart` 在风格卡下方增加「高精模型（外置下载）」面板：
+未下载 → 显示体积/三角形/贴图数与下载按钮；下载中 → 进度条；就绪 → 启用 / 删除。
+`_activeHighPoly` 非空时舞台改挂 `GlbPetViewer(src: file://…, timeout: 60s)`，
+右上角标签换成「高精 · 静态预览」；加载失败或 60s 超时由 `onFallback` 自动
+切回 `Avatar3DView`。选择状态存 `selection.json`，重进工坊保持。
+
+看门狗之所以加长到 60s：50 万三角形 + 3 张贴图需要 WebView 解码，
+原来给远程小模型设的 12s 会在真正加载完成前误判失败。`GlbPetViewer.timeout`
+现在是可配参数，宠物页仍用默认 12s。
+
+### 14.6 边界与安全债务（必须如实记录）
+
+- **无骨骼、无动画**：这两份 GLB `skins=0 / animations=0`，不会动。
+  工坊 87 项调参、服饰切换、分部位点击拾取、「生成并保存 .glb」全部**不作用于它**。
+  需要这些能力必须切回程序化造型。
+- **首次下载 48.2 MB / 30.8 MB**，需 PC 起自托管源 + `adb reverse`；离线时自动回落。
+- **手势边界**：`model_viewer_mobile.dart` 的 `InAppWebView` 硬编码了
+  `EagerGestureRecognizer`，会在手势竞技场里抢走垂直拖拽。因此**高精预览区内部**
+  的上下滑动用于旋转模型，不会滚动页面；页面仍可在舞台之外的任意区域正常滚动
+  （上一轮修好的整页 `SingleChildScrollView` 没有被破坏）。这一点已在面板文案里
+  明写，避免用户再次遇到「整体下不了拉」。程序化预览仍只吃水平拖拽。
+- **性能待测**：插件的 `/model` 路由把整个 GLB 一次性 `readAsBytes()` 读进内存，
+  48 MB 文件会带来约同等量级的 Dart 堆峰值，叠加 WebView 解码 50 万三角形；
+  中低端机帧率、内存与发热只能在真机确认，当前仅有静态与服务端验证。
+- **安全债务**：`res/xml/network_security_config.xml` 用的是
+  `base-config cleartextTrafficPermitted="true"`，这是**全域明文放行**，比「仅用于
+  回环」的描述更宽。保留它是为同时兼容用户可能填写的局域网自托管源与插件随机端口；
+  生产应改为 HTTPS，并收紧为 `domain-config` 白名单（至少 `127.0.0.1` / `localhost`）。
+  App 不通过明文传输用户数据。
+- **Android 13+ `<monochrome>` 图标**、iOS 1024 marketing 圆角风险仍属独立项。
+
+### 14.7 操作步骤（真机）
+
+```bash
+# 1) PC 启动自托管源（--advertise-host 必须带，否则清单写成局域网 IP，手机连不上）
+python tools/gguf_server.py --dir ./tools/gguf_models \
+  --host 127.0.0.1 --port 8080 --advertise-host 127.0.0.1 --name "本机自托管源"
+
+# 2) USB 连手机，做端口反向代理
+adb reverse tcp:8080 tcp:8080
+
+# 3) App 内：设置 → 3D 造型工坊 → 「高精模型（外置下载）」→ 下载 → 启用
+```
+
+若要换成自有 CDN，运行期设置 `HighPolyGlbManifest.baseUrl` 即可（`urlFor()` 会拼文件名）。
+
+### 14.8 本轮验证记录
+
+- `flutter analyze` 全量 0 问题；`flutter test` **556 项全通过**（原 547 + 新增 9 项
+  `test/high_poly_glb_test.dart`）；`test/avatar_studio_page_test.dart` 3 项无回归。
+- 服务端实测：manifest 中 `cen_youheng` 条目数 **0**（不混入模型清单）；
+  HEAD 返回 `200 / 50,536,636 / Accept-Ranges: bytes`；`Range: bytes=0-1023` 返回
+  **206 + 1024 字节**，首 4 字节为 `glTF`。
+- 两份 GLB 端到端完整下载：体积与 SHA-256 与清单**逐字节一致**。
+- 真机渲染与桌面图标生效仍需卸载重装（真机本轮未上线），见
+  `docs/avatar3d-device-validation-2026-11-12.md`。
+
+---
+
+## 15. 外貌描述驱动造型 + 宠物资产/轮廓（用户选定 A+B）
+
+### 15.1 核查结论（不沿用旧判断）
+
+用户问「描述外貌能否生成相应 3D 造型 / 人形像不像人 / 宠物像不像日常动物」，
+逐行核对后三条**都不成立**，且属架构缺口而非调参可补：
+
+| 核查项 | 事实 |
+| --- | --- |
+| `Persona` 字段 | 无任何外貌字段（发色/瞳色/脸型/身高全无），`role_create_page.dart` 表单也没有外貌输入 |
+| `PersonaVisualSpec` | 只对 likes/worldSetting/identity 做固定关键词匹配 → 4 类服装 + motif 开关；`toPrompt()` 写死 `Natural dark hair` 且**在 lib/ 内零调用方** |
+| 几何硬编码 | `chibi_builder.dart` 写死 `const hair = 0xFF3B3340`、`eyeDark = 0xFF6B4A38` |
+| 照片 | 96×96 量化直方图**只取配色**，不做人脸扫描/照片重建 |
+| AI 生成页 | 提示词只服务 2D 图片/视频，且 `generateImage/Video` 是占位管线；`_generateAvatar()` 输入是 PersonaVisualSpec，与自由描述无关 |
+| 人形 | 程序化约 4,662 三角形、顶点色、零贴图；外置高精 GLB 是**固定示例角色**、不受描述驱动 |
+| 宠物 | `creature_builder.dart` 让 103 个二级品类共用 10 种骨架（`_q` 四足 34 个），基因只映射 8 个色相 → 只换颜色 |
+| 宠物高精 | `pet_glb_manifest.dart` 原写死 `raw.githubusercontent.com`，真机 T1b 实测 12.0s 回落（P0） |
+
+### 15.2 A：外貌描述 → 造型（本地确定性）
+
+- `Persona.appearance` 存在 **`ext` JSON**（`ext['appearance']`），**不加数据库列、
+  不需要迁移、降级安装也读不错列**；`role_create_page.dart` 增加多行输入框与支持范围提示。
+- `PersonaVisualSpec.fingerprintSource` **仅在描述非空时**追加 `appearance:<text>`：
+  老角色指纹逐字不变（已落盘 GLB/缓存不作废），写了描述立刻变（触发重建）。
+  `toMap/fromMap` 同步；`toPrompt()` 改为以描述为准，删除写死的「自然深色头发」。
+- 新 `core/avatar3d/appearance_parser.dart`：`parse(text)` → `overrides / recognized /
+  unrecognized / suggestedStyle`。带**作用域判定**：片段含「眼/瞳/眸」时颜色只改瞳色，
+  含「发/头发/刘海」时只改发色，都不含则不改色 —— 避免「蓝色裙子」被当成发色。
+  覆盖发色、瞳色、肤色、发型、脸型、眼型、鼻嘴、身高体型、Q版/写实倾向等十类。
+  **未识别片段原样返回**，UI 明写「未识别（不生效）」，绝不假装理解。
+- `applyTo(AvatarTuning)` 经 `withValue` 二次 clamp；未知 key 直接忽略。
+- 接入点：工坊 `_load()` / 切换角色时自动应用一次（此时 `_tunings` 是默认风格值，
+  不会覆盖手动成果），另有「按描述重建」显式按钮；`ai_gen_page._generateAvatar()`
+  用**同一个解析器**构造 tuning/style 传给 `AvatarModelService.generate`，
+  保证「一键生成」与「工坊预览」不会各画各的。
+- **边界**：有限关键词规则、不是语义理解；输出仍是 22 骨骼低多边形程序化网格，
+  **不会变成写实真人**。要真正按描述生成几何，必须另接文/图生 3D 模型。
+
+### 15.3 B-1：宠物资产与 P0 修复（本地优先）
+
+可达性实测（本机）：
+
+| 源 | 结果 |
+| --- | --- |
+| `cdn.jsdmirror.com/gh/...Fox.glb` | **200 / 162,852 B** |
+| `gcore.jsdelivr.net`、`raw.githubusercontent.com` | `http=000`，不可达 |
+| `github.com/.../raw/...`（去代理直连） | `http=000`，不可达 |
+| 大文件（BarramundiFish 12 MB） | 镜像只回 65,535 B，声明长度 12,488,144 → **被截断，不可用** |
+
+→ **拿不到写实动物 GLB**。可用资产只有 3 份 CC0 示例，全部在
+`tools/gguf_models/pets/`（已 gitignore）：
+
+| 物种 | 文件 | 字节 | 三角形 | 贴图 | 骨骼/动画 | 实际观感 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fox` | `Fox.glb` | 162,852 | 576 | 1 | 1 / 3 | 橙白卡通四足狐，贴**图是色块** |
+| `duck` | `Duck.glb` | 120,484 | 4,212 | 1 | 0 / 0 | 黄色**橡皮鸭玩具** |
+| `mini_horse` | `Horse.glb` | 181,808 | 984 | 0 | 0 / 1 | three.js 演示用简化马 |
+
+诚实结论：**轮廓比程序化椭球正确，但都不写实**，不代表最终美术资产；
+要「照片级猫狗」必须采购/自制 GLB 并按 `PetGlbAssets` 格式登记。
+
+架构改动：
+- 新 `pet_glb_assets.dart`（唯一资产事实来源，含体积/SHA-256/写实度说明）
+  与 `pet_glb_store.dart`（复用 `ModelDownloader` 断点续传 + SHA-256，`file://` 渲染）。
+- `pet_glb_manifest.dart` 重构：`resolveSrc()` **本地已校验优先**；未下载且
+  `allowRemote=false` 时直接返回 `null`（回落程序化），**默认不再等公网超时** →
+  P0 从根上消除。兜底地址换成可达镜像，仅显式允许时使用。
+- `life_avatar_page.dart`：新增「高精宠物资产」面板（下载/进度/删除/失败提示/
+  写实度说明）；只有**本地就绪**才显示「高精↔风格化」切换，修掉旧 T5b
+  「按钮翻转但画面不变」的假状态。
+- 下载源：`http://127.0.0.1:8080/models/pets/<file>`，与 §14 共用自托管源 +
+  `adb reverse`；资产在子目录，不会混进模型清单。
+
+### 15.4 B-2：程序化轮廓差异化（不依赖资产）
+
+`creature_builder.dart` 新增 `_quadrupedShape(genes, limb)`，按 `ear / tail / coat`
+派生：圆耳（仓鼠）/ 垂耳（犬、羊）/ 长耳巨耳（兔、耳廓狐）/ 尖立耳（狐、猫）；
+蓬尾（加末端毛球）/ 卷尾 / 短尾；犬狐长吻 vs 猫兔短吻；
+矮胖短腿（仓鼠、刺猬）vs 细长（雪貂、水獭）vs 常规体型。
+统一补**深色鼻头**，眼睛往脸部中间收。
+`test/creature_shape_test.dart` 用顶点坐标签名断言 5 个物种几何各不相同，
+**不是只换颜色**。边界：仍是低多边形程序化，不是写实建模。
+
+### 15.5 操作步骤（真机）
+
+```bash
+# 1) PC 启动自托管源（--advertise-host 必须带）
+python tools/gguf_server.py --dir ./tools/gguf_models \
+  --host 127.0.0.1 --port 8080 --advertise-host 127.0.0.1 --name "本机自托管源"
+# 2) USB 连手机
+adb reverse tcp:8080 tcp:8080
+# 3) 角色：设置 → 角色 → 填「外貌描述（驱动 3D 造型）」→ 3D 造型工坊查看/按描述重建
+# 4) 宠物：生活 → 宠物 3D 形象 → 「高精宠物资产」→ 下载并启用（仅 fox/duck/mini_horse）
+```
+
+### 15.6 本轮验证
+
+- `flutter analyze` 全量 0 问题；`flutter test` **582 项全通过**（原 556 + 新增
+  12 项 `appearance_parser_test.dart` + 10 项 `pet_glb_assets_test.dart` +
+  4 项 `creature_shape_test.dart`）；既有工坊/世界 UI 测试无回归。
+- 自托管源 `manifest.json` 中宠物 GLB 条目 **0**；三份 HEAD 200；
+  `Range: bytes=0-1023` → **206 + 1024 字节**；三份完整下载的体积与 SHA-256
+  与清单**逐字节一致**。
+- 程序化差异：猫/犬/兔/仓鼠/狐生成 5 个互不相同的顶点几何签名，均含 `nose`。
+
+### 15.7 未完成
+
+- 写实宠物/人形资产仍未获得；103 个二级品类中仅 3 个有外置 GLB。
+  真正「像日常所见的猫狗」需采购/自制写实 GLB 或接入文/图生 3D。
+- 真机 d641192 本轮仍未上线；新图标、A/B 功能与卸载重装**未在真机复验**。
+- 全域明文放行（`network_security_config.xml`）仍是已知安全债务。
+- 本轮改动未 commit/push；旧基线 `9c20992` 的 CI 全绿不对应当前工作树。

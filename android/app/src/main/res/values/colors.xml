@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adaptive launcher icon background, sampled from design/app-icon/artwork-master-1024.png -->
+    <color name="ic_launcher_background">#F4F1FA</color>
+</resources>

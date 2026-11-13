@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>应用图标 · 无文字版 + Android 自适应图标</title>
+<style>
+  :root { --ink:#26215C; --muted:#6B6590; --line:#E5E0F5; --violet:#6F52E8; --lilac:#F6F2FF; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:44px 24px 64px; background:#FBFAFF; color:var(--ink);
+         font:400 15px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:860px; margin:0 auto; }
+  h1 { font-size:22px; font-weight:500; margin:0 0 6px; }
+  h2 { font-size:16px; font-weight:500; margin:38px 0 12px; }
+  h3 { font-size:14px; font-weight:500; margin:22px 0 8px; color:var(--violet); }
+  .lede { color:var(--muted); font-size:14px; margin:0 0 26px; }
+  .hero { display:grid; grid-template-columns:240px minmax(0,1fr); gap:28px; align-items:start;
+          background:#fff; border:1px solid var(--line); border-radius:20px; padding:24px; }
+  .hero img { display:block; width:240px; height:240px; border-radius:16px; }
+  .badge { display:inline-block; padding:3px 11px; border-radius:999px;
+           background:var(--lilac); color:var(--violet); font-size:12px; margin:0 6px 0 0; }
+  .facts { margin:16px 0 0; padding:0; list-style:none; font-size:14px; }
+  .facts li { padding:7px 0; border-bottom:1px solid var(--line); color:var(--muted); }
+  .facts li:last-child { border-bottom:0; }
+  .facts b { color:var(--ink); font-weight:500; }
+  .notes { color:var(--muted); font-size:14px; margin:0 0 14px; }
+  ol, ul { color:var(--muted); font-size:14px; padding-left:20px; margin:0; }
+  li { margin-bottom:7px; }
+  code { font-family:ui-monospace,Consolas,monospace; font-size:12px;
+         background:var(--lilac); color:var(--violet); padding:2px 6px; border-radius:5px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:20px; padding:24px; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  figure { margin:0; }
+  .pair img, .strip img { display:block; width:100%; border:1px solid var(--line);
+                          border-radius:12px; background:#F4F1FA; }
+  figcaption { font-size:12px; color:var(--muted); margin-top:8px; line-height:1.5; }
+  .strip { margin-top:20px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--ink); font-weight:500; background:var(--lilac); }
+  td { color:var(--muted); }
+  tr:last-child td { border-bottom:0; }
+  .ok { color:#2F8F6B; font-weight:500; }
+  .foot { margin-top:36px; padding-top:18px; border-top:1px solid var(--line);
+          font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>应用图标 · 无文字版 + Android 自适应图标</h1>
+  <p class="lede">按你的要求去掉「AI COMPANION」文字；对话气泡、心、手、星星、虚线轨迹与圆角卡片一笔未动。</p>
+
+  <div class="hero">
+    <img src="final-icon-1024.png" alt="最终无文字应用图标">
+    <div>
+      <span class="badge">无文字版</span><span class="badge">legacy 已安装</span><span class="badge">adaptive 已安装</span>
+      <ul class="facts">
+        <li>文字、两侧短横线、下方细线 <b>全部移除</b>；文字带非底色像素 <b>14376 → 0</b></li>
+        <li>图形区 <b>y &lt; 740 逐字节 0 改动</b>，卡片圆角与渐变完整保留</li>
+        <li><b>Android legacy 5 档 + adaptive 前景 5 档 + iOS 15 个尺寸</b> 全部同步重刷</li>
+        <li>静态校验 <b>13 / 13 通过</b>；<code>aapt2</code> 全资源编译 <b>exit 0</b></li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>文字是怎么去掉的</h2>
+  <div class="card">
+    <div class="strip" style="margin-top:0">
+      <figure>
+        <img src="_noword-compare.png" alt="去文字前后对比">
+        <figcaption>左：原稿（含文字与下划线）　·　右：最终采用（无文字）。下半部没有矩形补丁、色带或文字残影。</figcaption>
+      </figure>
+    </div>
+  </div>
+  <p class="notes" style="margin-top:16px">先逐列用 y=774 与 y=901 两行插值出卡片底色模型，再<strong>只替换与底色差异大的像素</strong>（字形、短横线、下划线及其 3px 抗锯齿边缘），文字带内其余像素一个不动。第一版曾把整段 y=775–900 全量重绘，结果抹平了卡片自身的细微质感、留下一条可见的浅色横带，已废弃。最终只重绘带内 <b>29.3%</b> 像素。</p>
+  <ul>
+    <li><span class="ok">通过</span>　文字带 <code>lum&lt;215</code> 像素 <b>14376 → 0</b>；<code>lum&lt;230</code> 仅剩 1 个，与上方干净带的底色噪点同量级</li>
+    <li><span class="ok">通过</span>　图形区 y &lt; 740 与原稿 <b>逐字节完全一致（0 差异像素）</b></li>
+  </ul>
+
+  <h2>Android 自适应图标（API 26+）</h2>
+  <div class="card">
+    <div class="pair">
+      <figure>
+        <img src="_adaptive/adaptive-composite.png" alt="108dp 自适应画布合成效果">
+        <figcaption>108dp 画布合成图：前景卡片居中 56dp，四周为采样自原图的纯色背景 <code>#F4F1FA</code>。</figcaption>
+      </figure>
+      <figure>
+        <img src="_adaptive/adaptive-safezone.png" alt="66dp 安全区示意">
+        <figcaption>紫色虚线为系统保证的 <b>66dp 安全圆</b>。去文字后图形最远只到 21.2dp，余量 11.8dp。</figcaption>
+      </figure>
+    </div>
+    <div class="strip">
+      <figure>
+        <img src="_adaptive/adaptive-masks.png" alt="四种启动器遮罩效果">
+        <figcaption>方形 / 圆形 / 圆角方形 / 超椭圆四种遮罩，均无文字，图形完整、卡片边缘无硬缝。</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <h3>为什么仍是 56dp</h3>
+  <p class="notes">自适应画布固定 <b>108dp</b>，启动器只取中间约 72dp 视口并套自己的形状遮罩，保证不被裁的是中心 <b>66dp 圆</b>（半径 33dp）。原先 56dp 是为了让横贯底部的文字两端留在圆内；文字移除后，最远内容变成图形外缘（约 <code>0.42 × 56 = 23.5dp</code>，实测深色像素 <b>21.2dp</b>）。尺寸保持不变以免引入无谓改动，多出来的 11.8dp 余量留给厂商视差缩放；若想让图形更饱满，把 <code>_make_adaptive.py</code> 的 <code>CARD_DP</code> 调大即可。</p>
+
+  <h3>分层与文件</h3>
+  <table>
+    <tr><th>层</th><th>资源</th><th>说明</th></tr>
+    <tr><td>前景</td><td><code>mipmap-*/ic_launcher_foreground.png</code></td><td>无文字原图缩到 224px（432 画布 = xxxhdpi）居中，RGBA 透明底 + 12px 圆角羽化</td></tr>
+    <tr><td>背景</td><td><code>values/colors.xml</code> → <code>#F4F1FA</code></td><td>不透明纯色，取自原图卡片浅紫白</td></tr>
+    <tr><td>装配</td><td><code>mipmap-anydpi-v26/ic_launcher.xml</code></td><td><code>&lt;adaptive-icon&gt;</code> 引用上面两层</td></tr>
+    <tr><td>兼容</td><td><code>mipmap-*/ic_launcher.png</code></td><td>API &lt; 26 用同一张无文字图，5 档已同步重刷</td></tr>
+  </table>
+  <p class="notes" style="margin-top:14px"><code>AndroidManifest.xml</code> 未改动：只声明 <code>android:icon</code>、没有 <code>roundIcon</code>，所有启动器都走同一个 adaptive 资源。</p>
+
+  <h3>验证</h3>
+  <ul>
+    <li><span class="ok">通过</span>　<code>aapt2 compile --dir</code> 编译整个 <code>res/</code> <b>exit 0</b>；<code>xmllint</code> 格式合法</li>
+    <li><span class="ok">通过</span>　5 档 legacy + 5 档 foreground + iOS 15 项清单 + 2 处资源引用，共 <b>13 / 13</b> 校验通过</li>
+    <li><span class="ok">通过</span>　192px 实际装机图标与四种遮罩实渲染目视：无文字、无残影、图形完好</li>
+    <li>未跑完整 Gradle / Flutter 构建（资源编译已验证），未改代码或 CI，未 commit / push</li>
+  </ul>
+
+  <h2>落地方式与可复现性</h2>
+  <p class="notes"><code>_remove_wordmark.py</code> 产出无文字主图 <code>artwork-master-1024-noword.png</code>（带文字原稿 <code>artwork-master-1024.png</code> 保留）；再用 <code>ICON_SOURCE=&lt;无文字主图绝对路径&gt;</code> 分别重跑 <code>_make_icons.py</code>（20 个平台 PNG）与 <code>_make_adaptive.py</code>（5 档前景 + 装配 XML + 预览图）。三个脚本全为纯 Python，不依赖 Pillow，可重复执行；<code>_make_icons.py</code> 的备份改为幂等，重跑不会覆盖那 20 个原始 Flutter 默认图标。</p>
+
+  <h2>需要你知道的取舍</h2>
+  <ol>
+    <li><b>下半部留白变多</b>：文字原本压在卡片下 1/4，去掉后图形偏上、下方留白更明显。这是「只删文字、不重排图形」的必然结果，也是我刻意保持最小改动；若要更饱满，需要把图形抠出重新放大居中，那会改动你指定的构图。</li>
+    <li><b>小尺寸更清爽</b>：原来 20–48px 下文字会糊成一条线，现在没了，但细线节点仍会合并——这是图形本身的信息量决定的。</li>
+    <li><b>圆角仍会被裁</b>：圆形遮罩会切掉卡片四角，那四角是纯留白且已做羽化过渡，无信息损失。</li>
+    <li><b>没有主题单色层</b>：Android 13+ themed icon 需要额外 <code>&lt;monochrome&gt;</code> 层，本次未做，图标始终显示原配色。</li>
+    <li><b>App Store 风险</b>：iOS 1024 marketing 图仍带圆角与白角，提审前苹果通常要求无圆角不透明方图。</li>
+  </ol>
+
+  <h2>回滚</h2>
+  <p class="notes">只移除自适应层：<code>python design/app-icon/_make_adaptive.py --revert</code>。<br>恢复<b>带文字版用户图</b>：把 <code>ICON_SOURCE</code> 指回 <code>artwork-master-1024.png</code> 重跑上面两个生成脚本即可。<br>恢复<b>工程最初的 Flutter 默认蓝色 logo</b>：<code>_backup-original-icons/</code> 里 20 个文件按对应路径复制回去，或直接 <code>git restore</code> 那 20 个受版本控制的文件。</p>
+
+  <div class="foot">源图：<code>user-icon-source.jpg</code>　·　带文字原稿：<code>artwork-master-1024.png</code>　·　当前主图：<code>artwork-master-1024-noword.png</code>　·　自适应分层：<code>_adaptive/</code>　·　历史草稿：<code>_deprecated-cartoon/</code>、<code>_drafts-linework/</code></div>
+</div>
+</body>
+</html>

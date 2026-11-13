@@ -34,7 +34,14 @@ class _ModelCatalogPageState extends State<ModelCatalogPage> {
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Text(
-              '模型全部本地运行、按需下载，不打进安装包。内置源为占位，请添加你自托管的合规源。',
+              '模型全部本地运行、按需下载，不打进安装包。\n'
+              '默认源指向电脑上的自托管服务，三步即可下载：\n'
+              '1) 电脑运行：python tools/gguf_server.py --dir ./gguf_models '
+              '--advertise-host 127.0.0.1\n'
+              '2) USB 连接后运行：adb reverse tcp:8080 tcp:8080\n'
+              '3) 展开下方「本机自托管源」，点模型右侧按钮下载（带 SHA-256 校验）。\n'
+              '把合规的 GGUF / ONNX 放进 gguf_models 目录就会出现在清单里；'
+              '也可点下方按钮添加自己的 NAS / HTTPS 源。',
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           ),
@@ -46,11 +53,21 @@ class _ModelCatalogPageState extends State<ModelCatalogPage> {
             onPressed: () => _showAddDialog(context),
           ),
           const SizedBox(height: 16),
-          const Text('内置示例模型（占位，不会真实可下）',
-              style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text(
+            '内置示例清单（占位，不可下载）',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 4),
+            child: Text(
+              '下面这些只是展示模型类型用的条目，地址是示例域名，按钮被禁用。'
+              '真实模型请从上方自托管源下载。',
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+            ),
+          ),
           ..._manager.builtInModels().map(
-                (m) => CatalogModelTile(manager: _manager, info: m, disabled: true),
-              ),
+            (m) => CatalogModelTile(manager: _manager, info: m, disabled: true),
+          ),
         ],
       ),
     );
@@ -71,7 +88,10 @@ class _ModelCatalogPageState extends State<ModelCatalogPage> {
               children: [
                 TextField(
                   controller: nameC,
-                  decoration: const InputDecoration(labelText: '名称', hintText: '我的 NAS'),
+                  decoration: const InputDecoration(
+                    labelText: '名称',
+                    hintText: '我的 NAS',
+                  ),
                 ),
                 TextField(
                   controller: urlC,
@@ -91,10 +111,15 @@ class _ModelCatalogPageState extends State<ModelCatalogPage> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
             TextButton(
               onPressed: () {
-                if (nameC.text.trim().isEmpty || urlC.text.trim().isEmpty) return;
+                if (nameC.text.trim().isEmpty || urlC.text.trim().isEmpty) {
+                  return;
+                }
                 Navigator.pop(ctx, true);
               },
               child: const Text('添加'),
@@ -145,7 +170,10 @@ class _SourceCardState extends State<SourceCard> {
       child: ExpansionTile(
         initiallyExpanded: _expanded,
         title: Text(s.name),
-        subtitle: Text(s.baseUrl, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        subtitle: Text(
+          s.baseUrl,
+          style: const TextStyle(fontSize: 12, color: Colors.grey),
+        ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -181,17 +209,36 @@ class _SourceCardState extends State<SourceCard> {
               if (snap.hasError) {
                 return ListTile(
                   leading: const Icon(Icons.error, color: Colors.red),
-                  title: Text('清单拉取失败：${snap.error}',
-                      style: const TextStyle(color: Colors.red, fontSize: 12)),
+                  title: Text(
+                    '清单拉取失败：${snap.error}',
+                    style: const TextStyle(color: Colors.red, fontSize: 12),
+                  ),
+                  // 失败时给出可执行动作，而不是让用户对着异常猜。
+                  subtitle: s.builtIn
+                      ? const Text(
+                          '请先在电脑启动 tools/gguf_server.py（带 '
+                          '--advertise-host 127.0.0.1），再执行 '
+                          'adb reverse tcp:8080 tcp:8080；'
+                          '若用 Wi-Fi/NAS 源，请确认手机能访问该地址。',
+                          style: TextStyle(fontSize: 11),
+                        )
+                      : const Text(
+                          '确认地址可访问、服务已启动；带 Token 的私有源请核对 Token。',
+                          style: TextStyle(fontSize: 11),
+                        ),
                 );
               }
               final models = snap.data!;
               if (models.isEmpty) {
-                return const ListTile(title: Text('该源暂无模型', style: TextStyle(color: Colors.grey)));
+                return const ListTile(
+                  title: Text('该源暂无模型', style: TextStyle(color: Colors.grey)),
+                );
               }
               return Column(
                 children: models
-                    .map((m) => CatalogModelTile(manager: widget.manager, info: m))
+                    .map(
+                      (m) => CatalogModelTile(manager: widget.manager, info: m),
+                    )
                     .toList(),
               );
             },
@@ -258,21 +305,30 @@ class _CatalogModelTileState extends State<CatalogModelTile> {
     return Opacity(
       opacity: widget.disabled ? 0.6 : 1.0,
       child: ListTile(
-        title: Text(m.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+        title: Text(
+          m.name,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(m.description, style: const TextStyle(fontSize: 12)),
-            Text('体积：${m.sizeLabel}',
-                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            Text(
+              '体积：${m.sizeLabel}',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
             if (m.sha256 != null)
-              Text('SHA256：${m.sha256!.substring(0, 16)}…',
-                  style: const TextStyle(fontSize: 11, color: Colors.green)),
+              Text(
+                'SHA256：${m.sha256!.substring(0, 16)}…',
+                style: const TextStyle(fontSize: 11, color: Colors.green),
+              ),
             if (_downloading)
               LinearProgressIndicator(value: _progress < 0 ? null : _progress),
             if (_error != null)
-              Text('下载失败：$_error',
-                  style: const TextStyle(color: Colors.red, fontSize: 12)),
+              Text(
+                '下载失败：$_error',
+                style: const TextStyle(color: Colors.red, fontSize: 12),
+              ),
           ],
         ),
         trailing: widget.disabled
@@ -281,7 +337,10 @@ class _CatalogModelTileState extends State<CatalogModelTile> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (isActive)
-                    const Chip(label: Text('当前'), backgroundColor: Colors.greenAccent)
+                    const Chip(
+                      label: Text('当前'),
+                      backgroundColor: Colors.greenAccent,
+                    )
                   else if (_downloading)
                     Text('${(_progress * 100).toInt()}%')
                   else

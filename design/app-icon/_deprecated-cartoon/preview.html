@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>私人 AI 陪伴 · 应用图标设计稿</title>
+<style>
+  :root {
+    --ink: #26215C;
+    --muted: #6B6590;
+    --line: #E5E0F5;
+    --violet: #6F52E8;
+    --lilac: #F6F2FF;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 48px 24px 64px;
+    background: #FBFAFF;
+    color: var(--ink);
+    font: 400 15px/1.7 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 500; margin: 0 0 6px; }
+  .lede { color: var(--muted); font-size: 14px; margin: 0 0 8px; }
+  .meta { color: var(--muted); font-size: 13px; margin: 0 0 36px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+  .card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 22px 22px 24px;
+    text-align: center;
+  }
+  .card.pick { border: 2px solid #A68CF2; }
+  .num { font-size: 12px; color: var(--muted); letter-spacing: .08em; }
+  .badge {
+    display: inline-block; margin-left: 8px; padding: 1px 9px;
+    border-radius: 999px; background: var(--lilac); color: var(--violet);
+    font-size: 12px;
+  }
+  .card img { display: block; width: 100%; max-width: 240px; margin: 14px auto 18px; }
+  .name { font-size: 16px; font-weight: 500; margin: 0 0 4px; }
+  .idea { color: var(--muted); font-size: 13px; margin: 0; min-height: 44px; }
+  h2 { font-size: 16px; font-weight: 500; margin: 44px 0 10px; }
+  .notes { color: var(--muted); font-size: 14px; margin: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
+  .chips li {
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 12px; font-size: 12px; color: var(--muted); background: #fff;
+  }
+  .swatches { display: grid; grid-template-columns: repeat(5, 88px); margin-top: 14px; }
+  .sw {
+    position: relative; width: 34px; height: 34px; margin-bottom: 28px;
+    border-radius: 10px; border: 1px solid rgba(0,0,0,.06);
+  }
+  .sw span {
+    position: absolute; top: 40px; left: 0;
+    font-size: 11px; color: var(--muted); white-space: nowrap;
+  }
+  ol { color: var(--muted); font-size: 14px; padding-left: 20px; margin: 0; }
+  ol li { margin-bottom: 6px; }
+  .foot { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>应用图标设计稿 · 私人 AI 陪伴</h1>
+  <p class="lede">一笔画完，故意不收口。浅紫是这只小生灵呼吸的底色。</p>
+  <p class="meta">三枚候选 / 512 × 512 / 平涂无渐变 / 线条统一圆头 / 未写入任何 Android 或 iOS 资源</p>
+
+  <div class="grid">
+    <div class="card pick">
+      <div class="num">01 <span class="badge">主推</span></div>
+      <img src="a-fox-loop.svg" alt="环尾小狐">
+      <p class="name">环尾小狐</p>
+      <p class="idea">尾巴绕成一圈没合拢的怀抱，一只眼睛闭着、一只睁着。呼应 3D 狐狸与长期陪伴。</p>
+    </div>
+    <div class="card">
+      <div class="num">02</div>
+      <img src="b-bubble-pet.svg" alt="气泡小兽">
+      <p class="name">气泡小兽</p>
+      <p class="idea">对话气泡长出两只耳尖，右侧故意留一道缺口。最直白地讲清「会聊天的伙伴」。</p>
+    </div>
+    <div class="card">
+      <div class="num">03</div>
+      <img src="c-moon-pet.svg" alt="月牙与星">
+      <p class="name">月牙与星</p>
+      <p class="idea">两笔勾出一弯月牙，凹处一只闭着的眼，旁边随手点一颗星。最安静，最像深夜里的隐私陪伴。</p>
+    </div>
+  </div>
+
+  <h2>笔法约定</h2>
+  <p class="notes">不闭合、不对称、留一口气：轮廓在左耳根断开 6px，尾巴只画一个不收口的 C，两端一高一低；左右眼一闭一睁。所有曲线都是手写路径，没有几何模板、没有描摹素材，端点一律圆头、不留折角。</p>
+  <ul class="chips">
+    <li>主线条 18–20px 圆头</li>
+    <li>断笔 6px</li>
+    <li>图形 53% / 安全区 61%</li>
+    <li>无渐变 / 无阴影</li>
+    <li>粉色只出现一次</li>
+  </ul>
+
+  <h2>取自 app 现有色板</h2>
+  <p class="notes">紫来自主题 seed，粉来自 accent，浅紫来自卡片表面色——图标放进系统桌面不会和 app 内部割裂。主线条刻意比底色深一档，是为了 48px 下不糊成一团。</p>
+  <div class="swatches">
+    <div class="sw" style="background:#F6F2FF"><span>#F6F2FF</span></div>
+    <div class="sw" style="background:#EDE7FF"><span>#EDE7FF</span></div>
+    <div class="sw" style="background:#A68CF2"><span>#A68CF2</span></div>
+    <div class="sw" style="background:#6F52E8"><span>#6F52E8</span></div>
+    <div class="sw" style="background:#FF8FB1"><span>#FF8FB1</span></div>
+  </div>
+
+  <h2>确认之后才会做的落地</h2>
+  <ol>
+    <li>把选定稿导出成 48 / 72 / 96 / 144 / 192 px 五档，替换 Android 各 mipmap 里的 Flutter 默认蓝色 logo。</li>
+    <li>新建 mipmap-anydpi-v26/ic_launcher.xml，用已备好的透明前景层 + 浅紫背景层做自适应图标。</li>
+    <li>按 AppIcon.appiconset/Contents.json 补齐 iOS 全部尺寸，保持不透明、无圆角（由系统裁切）。</li>
+    <li>本地构建核对产物，不主动提交、不碰 CI，除非另行要求。</li>
+  </ol>
+
+  <div class="foot">设计稿阶段 · 当前仓库工作树只新增了 design/app-icon/ 下的设计文件，未改动任何应用资源。</div>
+</div>
+</body>
+</html>

@@ -4,7 +4,10 @@
 /// - 模型**不打进 APK**，运行时按需从「自托管源」下载到应用私有目录。
 /// - `url` 默认是占位示例域名，**务必替换为你自己托管的合规下载源**（规避版权/合规风险）。
 /// - `sha256` 用于下载后完整性校验，防止模型文件被篡改。
-enum ModelKind { llm, embedding, tts, stt, diffusion }
+/// [avatarGlb] 不是推理模型，仅复用同一套「外置下载 + 断点续传 + SHA-256
+/// 校验」基础设施来承接高精 3D 资产。放在末尾，保证 fromJson 的
+/// `ModelKind.values.firstWhere` 对旧状态文件仍向后兼容。
+enum ModelKind { llm, embedding, tts, stt, diffusion, avatarGlb }
 
 class ModelInfo {
   /// 校验落盘文件名。
@@ -49,15 +52,15 @@ class ModelInfo {
   /// 持久化「当前选用模型」快照。冷启动时 manifest 还没拉取，
   /// 若不保存完整元信息，就无从判断本地模型是否可用（见 ModelManager）。
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'kind': kind.name,
-        'fileName': fileName,
-        'url': url,
-        'sizeBytes': sizeBytes,
-        'sha256': sha256,
-        'description': description,
-      };
+    'id': id,
+    'name': name,
+    'kind': kind.name,
+    'fileName': fileName,
+    'url': url,
+    'sizeBytes': sizeBytes,
+    'sha256': sha256,
+    'description': description,
+  };
 
   factory ModelInfo.fromJson(Map<String, dynamic> j) {
     final fileName = j['fileName'] as String;

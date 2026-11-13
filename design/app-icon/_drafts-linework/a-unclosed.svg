@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img">
+  <title>未合</title>
+  <desc>一条不收口的弧，右上角悬着一道不相接的短笔；没有脸、没有圆点，只有笔迹与留白。</desc>
+  <rect x="0" y="0" width="512" height="512" rx="72" fill="#FBF9FF"/>
+  <g transform="rotate(-7 256 256) translate(256 256) scale(0.9) translate(-256 -256)">
+    <path d="M 344 148 C 396 208 400 300 336 360 C 272 420 176 400 144 328 C 116 264 132 196 180 160"
+          fill="none" stroke="#7C5CFF" stroke-width="11" stroke-linecap="round"/>
+    <path d="M 372 118 C 386 128 390 140 388 152"
+          fill="none" stroke="#C3B2F7" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>

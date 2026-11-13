@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:private_ai_companion/app/di.dart';
+import 'package:private_ai_companion/core/avatar3d/appearance_parser.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_model_service.dart';
+import 'package:private_ai_companion/core/avatar3d/avatar_tuning.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_view.dart';
 import 'package:private_ai_companion/core/constants.dart';
 import 'package:private_ai_companion/core/desktop/desktop_overlay_service.dart';
@@ -151,7 +153,16 @@ class _AiGenPageState extends State<AiGenPage> {
     }
     setState(() => _busy = true);
     try {
-      final avatar = await _avatarService.generate(spec);
+      // 人设卡里的外貌描述在这里同样生效：与工坊共用同一个确定性解析器，
+      // 保证「一键生成」和「工坊预览」得到同一套造型，不会各画各的。
+      final parsed = AppearanceParser.parse(spec.appearance);
+      final style = parsed.suggestedStyle ?? AvatarStyle.chibi;
+      final tuning = parsed.applyTo(AvatarTuning.forStyle(style));
+      final avatar = await _avatarService.generate(
+        spec,
+        style: style,
+        tuning: tuning,
+      );
       // 同步写一条建模记录，和「形象建模」历史保持一致。
       final m = await _gen.buildUserModel(
         AppConstants.localUserId,
@@ -163,8 +174,11 @@ class _AiGenPageState extends State<AiGenPage> {
         _avatar = avatar;
         _userModel = m;
       });
-      _toast('已生成 3D 模型：${avatar.boneCount} 骨骼 / '
-          '${avatar.triangleCount} 三角面 / ${(avatar.bytes / 1024).toStringAsFixed(1)} KB');
+      _toast(
+        '已生成 3D 模型：${avatar.boneCount} 骨骼 / '
+        '${avatar.triangleCount} 三角面 / ${(avatar.bytes / 1024).toStringAsFixed(1)} KB'
+        '${parsed.hasOverrides ? '\n按外貌描述应用：${parsed.summary}' : ''}',
+      );
     } catch (e) {
       _toast('生成失败：$e');
     } finally {
@@ -185,9 +199,11 @@ class _AiGenPageState extends State<AiGenPage> {
       if (!mounted) return;
       setState(() => _avatar = avatar);
       final brief = avatar.notes.take(2).join('；');
-      _toast('已载入：${avatar.mesh.triangleCount} 面 / '
-          '${avatar.mesh.boneCount} 骨骼'
-          '${brief.isEmpty ? '' : '\n$brief'}');
+      _toast(
+        '已载入：${avatar.mesh.triangleCount} 面 / '
+        '${avatar.mesh.boneCount} 骨骼'
+        '${brief.isEmpty ? '' : '\n$brief'}',
+      );
     } catch (e) {
       _toast('载入失败：$e');
     } finally {
@@ -244,10 +260,9 @@ class _AiGenPageState extends State<AiGenPage> {
                   value: _personaId,
                   items: [
                     const DropdownMenuItem(value: null, child: Text('（不指定）')),
-                    ..._personaList.map((p) => DropdownMenuItem(
-                          value: p.id,
-                          child: Text(p.name),
-                        )),
+                    ..._personaList.map(
+                      (p) => DropdownMenuItem(value: p.id, child: Text(p.name)),
+                    ),
                   ],
                   onChanged: (v) => setState(() => _personaId = v),
                 ),
@@ -281,13 +296,17 @@ class _AiGenPageState extends State<AiGenPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('润色结果（可直接编辑后生成）',
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const Text(
+                      '润色结果（可直接编辑后生成）',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
                     const SizedBox(height: 6),
                     TextField(
                       controller: _polishedCtl,
                       maxLines: 3,
-                      decoration: const InputDecoration(border: OutlineInputBorder()),
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                      ),
                     ),
                   ],
                 ),
@@ -315,15 +334,17 @@ class _AiGenPageState extends State<AiGenPage> {
             ],
           ),
           const Divider(height: 28),
-          const Text('形象建模 · App 内一键生成 Q 版 3D 模型',
-              style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text(
+            '形象建模 · App 内一键生成 Q 版 3D 模型',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             icon: const Icon(Icons.tune_outlined, size: 17),
             label: const Text('打开 3D 造型工坊（照片取色 · 三种造型 · 逐部位微调）'),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const AvatarStudioPage()),
-            ),
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const AvatarStudioPage())),
           ),
           const SizedBox(height: 6),
           Text(
@@ -388,8 +409,10 @@ class _AiGenPageState extends State<AiGenPage> {
               style: TextStyle(fontSize: 11, color: Colors.grey),
             ),
             if (_userModel != null)
-              Text('建模记录已写入：${_userModel!.modelPath}',
-                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              Text(
+                '建模记录已写入：${_userModel!.modelPath}',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
           ],
           const SizedBox(height: 8),
           TextField(
@@ -410,17 +433,24 @@ class _AiGenPageState extends State<AiGenPage> {
             ),
           ),
           const Divider(height: 28),
-          Text('生成记录（${_history.length}）',
-              style: const TextStyle(fontWeight: FontWeight.bold)),
-          ..._history.map((m) => ListTile(
-                dense: true,
-                leading: Icon(m.type == 'image'
-                    ? Icons.image_outlined
-                    : Icons.movie_outlined),
-                title: Text(m.rawPrompt ?? m.prompt, maxLines: 2),
-                subtitle: Text('${m.type == 'image' ? '图片' : '视频'} · 占位资源 · ${m.filePath}',
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              )),
+          Text(
+            '生成记录（${_history.length}）',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          ..._history.map(
+            (m) => ListTile(
+              dense: true,
+              leading: Icon(
+                m.type == 'image' ? Icons.image_outlined : Icons.movie_outlined,
+              ),
+              title: Text(m.rawPrompt ?? m.prompt, maxLines: 2),
+              subtitle: Text(
+                '${m.type == 'image' ? '图片' : '视频'} · 占位资源 · ${m.filePath}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
           const SizedBox(height: 12),
           const Text(
             '说明：提示词润色走本地大模型；图片 / 视频仍为占位路径，端侧扩散管线未接入。'

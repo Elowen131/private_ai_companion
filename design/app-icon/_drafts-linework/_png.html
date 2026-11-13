@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  img { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<img id="art" alt="icon">
+<script>
+  var f = new URLSearchParams(location.search).get('f') || 'a-fox-loop.svg';
+  document.getElementById('art').src = f;
+</script>
+</body>
+</html>

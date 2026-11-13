@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img">
+  <title>气泡小兽</title>
+  <desc>不闭合的对话气泡长出两只耳尖，像一只正在听你说话的小兽。</desc>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="#F6F2FF"/>
+  <circle cx="256" cy="256" r="162" fill="#EDE7FF"/>
+
+  <g transform="translate(256 256) scale(0.9) translate(-256 -256)">
+  <path d="M 336 214 C 336 152 300 122 256 122 C 212 122 176 152 176 214 C 176 276 212 312 256 312 C 286 312 310 298 322 278"
+        fill="none" stroke="#6F52E8" stroke-width="18" stroke-linecap="round"/>
+  <path d="M 322 278 C 330 306 318 328 292 338"
+        fill="none" stroke="#A68CF2" stroke-width="16" stroke-linecap="round"/>
+
+  <path d="M 206 136 L 200 98 C 199 90 205 87 210 93 L 232 124"
+        fill="none" stroke="#6F52E8" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 280 124 L 302 93 C 307 87 313 90 312 98 L 306 136"
+        fill="none" stroke="#6F52E8" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M 214 212 C 222 222 234 222 242 212" fill="none" stroke="#6F52E8" stroke-width="11" stroke-linecap="round"/>
+  <circle cx="282" cy="213" r="6" fill="#6F52E8"/>
+  <circle cx="256" cy="248" r="7" fill="#FF8FB1"/>
+  </g>
+</svg>

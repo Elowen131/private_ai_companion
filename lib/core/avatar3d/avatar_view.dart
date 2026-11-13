@@ -28,6 +28,12 @@ class Avatar3DView extends StatefulWidget {
   /// 是否允许手指拖拽旋转（悬浮窗里可能影响拖动窗口，可关掉）。
   final bool interactive;
 
+  /// true = 只响应水平拖拽旋转，把垂直拖拽让给外层可滚动页面。
+  ///
+  /// 造型工坊整页可滚动时用 true：否则预览区的 [onPanUpdate] 会与父级
+  /// Scrollable 抢垂直手势，用户在预览上往下滑时页面不动、模型却在转头。
+  final bool dragHorizontalOnly;
+
   /// 是否缓慢自动摆头，增加活物感。
   final bool autoRotate;
 
@@ -58,6 +64,7 @@ class Avatar3DView extends StatefulWidget {
     this.mood = 'calm',
     this.action = '',
     this.interactive = true,
+    this.dragHorizontalOnly = false,
     this.autoRotate = true,
     this.animate = true,
     this.atmosphere = true,
@@ -131,9 +138,10 @@ class _Avatar3DViewState extends State<Avatar3DView>
   }
 
   @override
-  void   didUpdateWidget(covariant Avatar3DView old) {
+  void didUpdateWidget(covariant Avatar3DView old) {
     super.didUpdateWidget(old);
-    if (old.mesh != widget.mesh || old.spec.fingerprint != widget.spec.fingerprint) {
+    if (old.mesh != widget.mesh ||
+        old.spec.fingerprint != widget.spec.fingerprint) {
       _prepare();
     }
     if (old.action != widget.action && widget.action.isNotEmpty) {
@@ -171,6 +179,19 @@ class _Avatar3DViewState extends State<Avatar3DView>
     };
   }
 
+  void _rotate(double dx, double dy) {
+    _invalidateFrame();
+    setState(() {
+      _yaw += dx * 0.012;
+      _pitch = (_pitch + dy * 0.006).clamp(-0.35, 0.42);
+    });
+  }
+
+  void _onPan(DragUpdateDetails d) => _rotate(d.delta.dx, d.delta.dy);
+
+  /// 只改变水平视角；垂直分量丢弃，让外层滚动视图接管上下滑动。
+  void _onHorizontalDrag(DragUpdateDetails d) => _rotate(d.delta.dx, 0);
+
   @override
   Widget build(BuildContext context) {
     final tint = _moodTint(widget.mood);
@@ -194,14 +215,13 @@ class _Avatar3DViewState extends State<Avatar3DView>
                 widget.onRegionLongPress!(region);
               }
             },
-      onPanUpdate: widget.interactive
-          ? (d) {
-              _invalidateFrame();
-              setState(() {
-                _yaw += d.delta.dx * 0.012;
-                _pitch = (_pitch + d.delta.dy * 0.006).clamp(-0.35, 0.42);
-              });
-            }
+      // pan 与 horizontalDrag 不能同时注册（GestureDetector 会断言），二选一。
+      // 工坊整页可滚动时只认水平拖拽，垂直手势让给父级 Scrollable。
+      onPanUpdate: (widget.interactive && !widget.dragHorizontalOnly)
+          ? _onPan
+          : null,
+      onHorizontalDragUpdate: (widget.interactive && widget.dragHorizontalOnly)
+          ? _onHorizontalDrag
           : null,
       onDoubleTap: widget.interactive
           ? () {
@@ -237,7 +257,8 @@ class _Avatar3DViewState extends State<Avatar3DView>
 
   Widget _buildFrame(({Color color, double strength}) tint) {
     final t = widget.animate ? _ctrl.value * 1000 : 0.0;
-    final actionAge = DateTime.now().difference(_actionAt).inMilliseconds / 1000;
+    final actionAge =
+        DateTime.now().difference(_actionAt).inMilliseconds / 1000;
     final pose = _animator.pose(
       t,
       mood: widget.mood,

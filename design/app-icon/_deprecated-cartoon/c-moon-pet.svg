@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img">
+  <title>月牙与星</title>
+  <desc>两笔随手勾出一弯月牙，凹处留一只闭着的眼，旁边点一颗粉色小星。</desc>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="#F6F2FF"/>
+  <circle cx="256" cy="256" r="162" fill="#EDE7FF"/>
+
+  <g transform="translate(256 256) scale(0.9) translate(-256 -256)">
+  <path d="M 336 140 C 246 122 164 190 164 272 C 164 344 220 394 300 398"
+        fill="none" stroke="#6F52E8" stroke-width="18" stroke-linecap="round"/>
+  <path d="M 300 398 C 292 350 268 316 270 266 C 272 214 296 172 336 140"
+        fill="none" stroke="#6F52E8" stroke-width="18" stroke-linecap="round"/>
+
+  <path d="M 316 250 C 322 258 332 258 338 250"
+        fill="none" stroke="#6F52E8" stroke-width="11" stroke-linecap="round"/>
+
+  <path d="M 376 196 C 378 206 382 210 392 212 C 382 214 378 218 376 228 C 374 218 370 214 360 212 C 370 210 374 206 376 196 Z"
+        fill="#FF8FB1"/>
+  </g>
+</svg>

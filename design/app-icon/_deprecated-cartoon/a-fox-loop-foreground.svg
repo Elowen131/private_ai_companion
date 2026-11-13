@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img">
+  <title>环尾小狐 · 前景层</title>
+  <desc>透明底前景层，供 Android 自适应图标使用；图形全部位于中央安全区内。</desc>
+  <g transform="translate(256 256) scale(0.9) translate(-256 -256)">
+  <path d="M 352 158 C 396 214 404 292 356 348 C 312 400 226 402 172 366 C 126 328 118 262 146 214"
+        fill="none" stroke="#A68CF2" stroke-width="20" stroke-linecap="round"/>
+
+  <path d="M 196 214 C 196 268 222 306 256 306 C 290 306 316 268 316 214 L 322 162 C 324 152 320 148 314 152 L 286 182 C 268 176 244 176 226 182 L 198 152 C 192 148 188 152 190 162 L 196 208"
+        fill="none" stroke="#6F52E8" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M 204 170 L 216 186" fill="none" stroke="#C4B2FA" stroke-width="8" stroke-linecap="round"/>
+  <path d="M 308 170 L 296 186" fill="none" stroke="#C4B2FA" stroke-width="8" stroke-linecap="round"/>
+
+  <path d="M 222 236 C 230 246 242 246 250 236" fill="none" stroke="#6F52E8" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="282" cy="237" r="6.5" fill="#6F52E8"/>
+  <circle cx="256" cy="266" r="7" fill="#FF8FB1"/>
+  </g>
+</svg>

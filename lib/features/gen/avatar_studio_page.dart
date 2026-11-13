@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/app/motion.dart';
 import 'package:private_ai_companion/app/router.dart';
@@ -14,7 +15,11 @@ import 'package:private_ai_companion/core/avatar3d/avatar_painter.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_regions.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_tuning.dart';
 import 'package:private_ai_companion/core/avatar3d/avatar_view.dart';
+import 'package:private_ai_companion/core/avatar3d/appearance_parser.dart';
 import 'package:private_ai_companion/core/avatar3d/chibi_builder.dart';
+import 'package:private_ai_companion/core/avatar3d/glb_pet_viewer.dart';
+import 'package:private_ai_companion/core/avatar3d/high_poly_glb_manifest.dart';
+import 'package:private_ai_companion/core/avatar3d/high_poly_glb_store.dart';
 import 'package:private_ai_companion/core/avatar3d/wardrobe_inference.dart';
 import 'package:private_ai_companion/core/desktop/desktop_overlay_service.dart';
 import 'package:private_ai_companion/core/desktop/persona_visual_spec.dart';
@@ -63,6 +68,7 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
   String? _hitText;
   String _reactionAction = '';
   AvatarStyle? _pending;
+
   /// 整组重建（_rebuildAll）进行中又发来一次请求时，记下待补跑，避免静默丢弃。
   bool _fullRebuildPending = false;
 
@@ -73,10 +79,46 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
   /// 调参区搜索词：用于在 87 项里快速定位某个调整项。
   String _query = '';
   final TextEditingController _searchCtl = TextEditingController();
+
   /// 新手提示条是否已关闭（仅本次会话内）。
   bool _tipDismissed = false;
+
   /// 当前造型是否已应用到桌面悬浮窗（用于流程进度指示）。
   bool _applied = false;
+
+  // ---------- 外貌描述 → 造型 ----------
+  /// 当前人设卡外貌描述的解析结果；null = 尚未加载人设。
+  AppearanceParseResult? _appearance;
+
+  /// 载入/切换人设时解析描述并叠加到三种风格的参数上。
+  ///
+  /// 这里只在**刚进入页面 / 刚换角色**时自动应用一次：那时 `_tunings` 是
+  /// `forStyle` 默认值，不会覆盖用户手动调过的成果。之后用户想重来，用面板
+  /// 上的「按描述重建」显式触发，绝不静默覆盖。
+  void _syncAppearance(PersonaVisualSpec? spec) {
+    final result = AppearanceParser.parse(spec?.appearance ?? '');
+    _appearance = result;
+    if (result.hasOverrides) {
+      for (final s in AvatarStyle.values) {
+        _tunings[s] = result.applyTo(_tunings[s]!);
+      }
+    }
+    if (result.suggestedStyle != null) _style = result.suggestedStyle!;
+  }
+
+  // ---------- 外置高精 GLB 通道 ----------
+  HighPolyGlbStore? _glbStore;
+  String? _highPolyId;
+  bool _highPolyEnabled = false;
+  bool _highPolyBusy = false;
+  double? _highPolyProgress;
+  String? _highPolyError;
+
+  /// 就绪状态缓存；下载 / 删除 / 校验后刷新。
+  final Map<String, bool> _highPolyReady = {};
+
+  HighPolyGlbEntry? get _activeHighPoly =>
+      _highPolyEnabled ? HighPolyGlbManifest.byId(_highPolyId) : null;
 
   @override
   void initState() {
@@ -85,6 +127,7 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
       for (final s in AvatarStyle.values) s: AvatarTuning.forStyle(s),
     };
     _load();
+    _initHighPoly();
   }
 
   @override
@@ -92,7 +135,145 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
     _debounce?.cancel();
     _hitTimer?.cancel();
     _searchCtl.dispose();
+    _glbStore?.close();
     super.dispose();
+  }
+
+  /// 初始化外置资产仓储。path_provider 在 widget 测试 / 无平台通道环境下
+  /// 会抛异常，这里静默降级为「高精入口不可用」，绝不影响程序化造型主流程。
+  Future<void> _initHighPoly() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final store = HighPolyGlbStore(dir.path);
+      if (!mounted) {
+        store.close();
+        return;
+      }
+      final (savedId, savedEnabled) = await store.loadSelection();
+      if (!mounted) {
+        store.close();
+        return;
+      }
+      final ready = <String, bool>{
+        for (final e in HighPolyGlbManifest.entries) e.id: store.isReady(e),
+      };
+      setState(() {
+        _glbStore = store;
+        _highPolyReady
+          ..clear()
+          ..addAll(ready);
+        if (savedId != null && (ready[savedId] ?? false)) {
+          _highPolyId = savedId;
+          _highPolyEnabled = savedEnabled;
+        }
+      });
+    } catch (_) {
+      // 缺少平台通道时保持 _glbStore == null，UI 显示不可用提示。
+    }
+  }
+
+  void _refreshHighPolyReady() {
+    final store = _glbStore;
+    if (store == null) return;
+    final ready = <String, bool>{
+      for (final e in HighPolyGlbManifest.entries) e.id: store.isReady(e),
+    };
+    if (!mounted) return;
+    setState(() {
+      _highPolyReady
+        ..clear()
+        ..addAll(ready);
+    });
+  }
+
+  /// 从自托管源下载高精 GLB。复用 ModelDownloader 的断点续传与 SHA-256 校验。
+  Future<void> _downloadHighPoly(HighPolyGlbEntry entry) async {
+    final store = _glbStore;
+    if (store == null || _highPolyBusy) return;
+    setState(() {
+      _highPolyBusy = true;
+      _highPolyProgress = 0;
+      _highPolyError = null;
+    });
+    try {
+      await for (final progress in store.download(entry)) {
+        if (!mounted) return;
+        setState(() => _highPolyProgress = progress < 0 ? null : progress);
+      }
+      if (!mounted) return;
+      final ok = await store.verify(entry);
+      if (!mounted) return;
+      setState(() {
+        _highPolyBusy = false;
+        _highPolyProgress = null;
+        _highPolyReady[entry.id] = ok;
+        if (!ok) _highPolyError = '校验未通过，请删除后重试';
+      });
+      _toast(ok ? '高精模型已下载，点「启用」即可切换' : '下载完成但校验未通过');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _highPolyBusy = false;
+        _highPolyProgress = null;
+        _highPolyError = '$e';
+      });
+      _toast('下载失败：请确认本机源已启动且已 adb reverse（详见下方说明）');
+    }
+  }
+
+  Future<void> _toggleHighPoly(HighPolyGlbEntry entry) async {
+    final store = _glbStore;
+    if (store == null) return;
+    if (_highPolyEnabled && _highPolyId == entry.id) {
+      setState(() => _highPolyEnabled = false);
+      await store.saveSelection(entry.id, false);
+      _toast('已切回程序化造型');
+      return;
+    }
+    // 启用前复验一次，避免本地文件被截断 / 替换导致 WebView 白屏。
+    final ok = await store.verify(entry);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() {
+        _highPolyEnabled = false;
+        _highPolyReady[entry.id] = false;
+        _highPolyError = '本地文件校验未通过，请重新下载';
+      });
+      _toast('本地文件损坏，请删除后重新下载');
+      return;
+    }
+    setState(() {
+      _highPolyId = entry.id;
+      _highPolyEnabled = true;
+      _highPolyError = null;
+    });
+    await store.saveSelection(entry.id, true);
+  }
+
+  Future<void> _deleteHighPoly(HighPolyGlbEntry entry) async {
+    final store = _glbStore;
+    if (store == null) return;
+    await store.delete(entry);
+    if (_highPolyId == entry.id) {
+      setState(() {
+        _highPolyEnabled = false;
+        _highPolyId = null;
+      });
+      await store.saveSelection(null, false);
+    }
+    _refreshHighPolyReady();
+    _toast('已删除本地高精模型');
+  }
+
+  /// 高精模型加载失败 / 超时后自动回落，并留下可读原因。
+  void _onHighPolyFallback() {
+    if (!mounted) return;
+    setState(() {
+      _highPolyEnabled = false;
+      _highPolyError = '渲染失败或超时，已切回程序化造型';
+    });
+    _glbStore?.saveSelection(_highPolyId, false);
+    _toast('高精模型加载失败，已回落到程序化造型');
   }
 
   /// 切换服饰：三张造型卡一起换，避免选中风格与预览卡片不一致。
@@ -112,7 +293,9 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
   void _setAdultEnabled(bool v) {
     setState(() {
       _adultEnabled = v;
-      final sex = v ? lowerSexFromGender(_spec?.gender ?? '') : AvatarLowerSex.neutral;
+      final sex = v
+          ? lowerSexFromGender(_spec?.gender ?? '')
+          : AvatarLowerSex.neutral;
       for (final s in AvatarStyle.values) {
         _tunings[s] = _tunings[s]!.withClothed(!v).withLowerSex(sex);
       }
@@ -182,6 +365,7 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
         _personaList = list;
         _personaId = list.isEmpty ? null : list.first.id;
         _spec = list.isEmpty ? null : PersonaVisualSpec.fromPersona(list.first);
+        _syncAppearance(_spec);
       });
       await _rebuildAll();
     } catch (e) {
@@ -189,12 +373,8 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
     }
   }
 
-  AvatarMesh _build(AvatarStyle s, PersonaVisualSpec spec) => buildChibiAvatar(
-        spec,
-        style: s,
-        tuning: _tunings[s],
-        palette: _palette,
-      );
+  AvatarMesh _build(AvatarStyle s, PersonaVisualSpec spec) =>
+      buildChibiAvatar(spec, style: s, tuning: _tunings[s], palette: _palette);
 
   /// 三种造型各生成一份网格，供卡片静态预览；逐帧让出事件循环避免首帧卡顿。
   Future<void> _rebuildAll() async {
@@ -273,8 +453,10 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
       // 因此这里不再单独 await _rebuildAll，避免重复重建。
       // 用户随后仍可点服饰标签手动改回，手选能力与色块 UI 均不变。
       _selectWardrobe(suggested);
-      _toast('已从照片提取配色（发色 / 衣着 / 点缀 / 肤色）\n'
-          '已按照片配色推荐服饰：${suggested.label}，可手动改回');
+      _toast(
+        '已从照片提取配色（发色 / 衣着 / 点缀 / 肤色）\n'
+        '已按照片配色推荐服饰：${suggested.label}，可手动改回',
+      );
     } catch (e) {
       _toast('照片读取失败：$e');
     }
@@ -372,8 +554,10 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
         _saved = g;
         _dirty = false;
       });
-      _toast('已生成 ${g.style.label} 模型：${g.boneCount} 骨骼 / '
-          '${g.triangleCount} 三角面 / ${(g.bytes / 1024).toStringAsFixed(1)} KB');
+      _toast(
+        '已生成 ${g.style.label} 模型：${g.boneCount} 骨骼 / '
+        '${g.triangleCount} 三角面 / ${(g.bytes / 1024).toStringAsFixed(1)} KB',
+      );
       return g;
     } catch (e) {
       _toast('生成失败：$e');
@@ -426,324 +610,426 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
           ),
         ],
       ),
+      // 整页单滚动视图：原先只有最底部的调参 ListView 能滚，上方预览舞台 /
+      // 风格卡 / 服饰 / 搜索框全是固定高度，在小屏上既溢出又无法下拉，
+      // 调参区被挤得只剩几十 dp。这里把除底部操作栏以外的内容统一交给
+      // 一个 SingleChildScrollView，底部按钮保持常驻不被滚走。
       body: Column(
         children: [
-          _header(spec),
-          AnimatedEntrance(child: _stepper()),
-          SizedBox(
-            height: 208,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Card(
-                clipBehavior: Clip.antiAlias,
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                        child: Container(decoration: _stageDecoration(context))),
-                    Positioned.fill(
-                        child: Container(decoration: _stageGlow(context))),
-                    if (spec == null)
-                      AnimatedEntrance(child: _emptyStage(context))
-                    else if (mesh == null)
-                      Center(
-                        child: Text('正在生成 3D 造型…',
-                            style: TextStyle(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurface
-                                    .withValues(alpha: 0.55),
-                                fontSize: 12)),
-                      )
-                    else
-                      Positioned.fill(
-                        child: Avatar3DView(
-                          mesh: mesh,
-                          spec: spec,
-                          mood: 'happy',
-                          action: _reactionAction,
-                          animate: _animate || _reactionAction.isNotEmpty,
-                          autoRotate: false,
-                          initialYaw: tuning.viewYaw,
-                          initialPitch: tuning.viewPitch,
-                          zoom: tuning.viewZoom,
-                          onRegionTap: (r) => _onRegionTap(r, spec),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _header(spec),
+                  AnimatedEntrance(child: _stepper()),
+                  SizedBox(
+                    height: 208,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: Container(
+                                decoration: _stageDecoration(context),
+                              ),
+                            ),
+                            Positioned.fill(
+                              child: Container(decoration: _stageGlow(context)),
+                            ),
+                            if (spec == null)
+                              AnimatedEntrance(child: _emptyStage(context))
+                            else if (mesh == null)
+                              Center(
+                                child: Text(
+                                  '正在生成 3D 造型…',
+                                  style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withValues(alpha: 0.55),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              )
+                            else if (_activeHighPoly != null &&
+                                _glbStore != null)
+                              Positioned.fill(
+                                child: GlbPetViewer(
+                                  key: ValueKey(_activeHighPoly!.id),
+                                  // 外置下载到应用私有目录，file:// 由插件的
+                                  // 回环代理读出，不依赖外网 / CORS。
+                                  src: _glbStore!.srcFor(_activeHighPoly!),
+                                  autoRotate: true,
+                                  // 50 万三角形 + 3 张贴图，WebView 解码需要时间。
+                                  timeout: const Duration(seconds: 60),
+                                  onFallback: _onHighPolyFallback,
+                                ),
+                              )
+                            else
+                              Positioned.fill(
+                                child: Avatar3DView(
+                                  mesh: mesh,
+                                  spec: spec,
+                                  mood: 'happy',
+                                  action: _reactionAction,
+                                  animate:
+                                      _animate || _reactionAction.isNotEmpty,
+                                  autoRotate: false,
+                                  // 整页可滚动：预览只吃左右拖动，上下滑动交还页面。
+                                  dragHorizontalOnly: true,
+                                  initialYaw: tuning.viewYaw,
+                                  initialPitch: tuning.viewPitch,
+                                  zoom: tuning.viewZoom,
+                                  onRegionTap: (r) => _onRegionTap(r, spec),
+                                ),
+                              ),
+                            if (_hitText != null)
+                              Positioned(
+                                bottom: 6,
+                                left: 8,
+                                right: 8,
+                                child: Center(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 5,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .surface
+                                          .withValues(alpha: 0.92),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      _hitText!,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurface,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            Positioned(
+                              right: 6,
+                              top: 2,
+                              child: _activeHighPoly != null
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .surface
+                                            .withValues(alpha: 0.88),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Text(
+                                        '高精 · 静态预览',
+                                        style: TextStyle(fontSize: 10),
+                                      ),
+                                    )
+                                  : Row(
+                                      children: [
+                                        Text(
+                                          '动画',
+                                          style: TextStyle(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurface
+                                                .withValues(alpha: 0.7),
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                        Switch(
+                                          value: _animate,
+                                          materialTapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          onChanged: (v) =>
+                                              setState(() => _animate = v),
+                                        ),
+                                      ],
+                                    ),
+                            ),
+                          ],
                         ),
                       ),
-                    if (_hitText != null)
-                      Positioned(
-                        bottom: 6,
-                        left: 8,
-                        right: 8,
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .surface
-                                  .withValues(alpha: 0.92),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              _hitText!,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                  color: Theme.of(context).colorScheme.onSurface,
-                                  fontSize: 11),
-                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (spec == null)
+                    const SizedBox.shrink()
+                  else ...[
+                    AnimatedEntrance(
+                      offset: const Offset(0, 0.05),
+                      child: SizedBox(
+                        height: 116,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            children: AvatarStyle.values
+                                .map(
+                                  (s) => Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                      ),
+                                      child: _StyleCard(
+                                        style: s,
+                                        selected: s == _style,
+                                        mesh: _meshes[s],
+                                        spec: spec,
+                                        tuning: _tunings[s]!,
+                                        onTap: () => _selectStyle(s),
+                                      ),
+                                    ),
+                                  ),
+                                )
+                                .toList(),
                           ),
                         ),
                       ),
-                    Positioned(
-                      right: 6,
-                      top: 2,
+                    ),
+                    const SizedBox(height: 8),
+                    _appearancePanel(),
+                    _highPolyPanel(),
+                    const SizedBox(height: 8),
+                    // 服饰款式：配色取自照片主色 + 人设卡，几何部件随款式切换。
+                    SizedBox(
+                      height: 42,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: AvatarWardrobe.values.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 6),
+                          itemBuilder: (_, i) {
+                            final w = AvatarWardrobe.values[i];
+                            return ChoiceChip(
+                              avatar: Icon(w.icon, size: 14),
+                              label: Text(
+                                w.label,
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                              tooltip: w.hint,
+                              selected: tuning.wardrobe == w,
+                              onSelected: (_) => _selectWardrobe(w),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        _palette == null
+                            ? '选一个造型与服饰开始调整；也可先上传照片，按照片配色重新生成'
+                            : '已按照片配色生成 3 种造型；点服饰标签可换款式，点角色不同部位有不同反应',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
                         children: [
-                          Text('动画',
-                              style: TextStyle(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurface
-                                      .withValues(alpha: 0.7),
-                                  fontSize: 11)),
-                          Switch(
-                            value: _animate,
-                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            onChanged: (v) => setState(() => _animate = v),
+                          const Text(
+                            '精细调整',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _query.isEmpty
+                                ? '${AvatarTuningSchema.params.length} 项 · 当前：${_style.label}'
+                                : '匹配 ${_matchCount(_query)} 项',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey,
+                            ),
                           ),
                         ],
                       ),
                     ),
+                    const SizedBox(height: 6),
+                    if (!_tipDismissed) AnimatedEntrance(child: _tipBanner()),
+                    AnimatedEntrance(child: _searchField()),
+                    const SizedBox(height: 6),
+                    // 外层已是滚动视图：这里必须 shrinkWrap + 禁用自身滚动，
+                    // 否则无限高度与 SingleChildScrollView 冲突（或再次抢走可视区）。
+                    ListView(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                      children: [
+                        for (final g in TuningGroup.values)
+                          _groupTile(g, tuning, _query),
+                        if (_adultVisible(_query)) _adultTile(tuning),
+                        const SizedBox(height: 6),
+                        const Text(
+                          '说明：所有调整都会写进导出的 .glb（含风格与逐项参数），'
+                          '悬浮窗会加载你最终保存的造型；人设身份仍由人设卡锁定。',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ],
+                    ),
                   ],
-                ),
+                ],
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          if (spec == null)
-            const SizedBox.shrink()
-          else ...[
-            AnimatedEntrance(
-              offset: const Offset(0, 0.05),
-              child: SizedBox(
-                height: 116,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: AvatarStyle.values
-                        .map((s) => Expanded(
-                              child: Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 4),
-                                child: _StyleCard(
-                                  style: s,
-                                  selected: s == _style,
-                                  mesh: _meshes[s],
-                                  spec: spec,
-                                  tuning: _tunings[s]!,
-                                  onTap: () => _selectStyle(s),
-                                ),
-                              ),
-                            ))
-                        .toList(),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            // 服饰款式：配色取自照片主色 + 人设卡，几何部件随款式切换。
-            SizedBox(
-              height: 42,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: AvatarWardrobe.values.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 6),
-                  itemBuilder: (_, i) {
-                    final w = AvatarWardrobe.values[i];
-                    return ChoiceChip(
-                      avatar: Icon(w.icon, size: 14),
-                      label: Text(w.label,
-                          style: const TextStyle(fontSize: 11)),
-                      tooltip: w.hint,
-                      selected: tuning.wardrobe == w,
-                      onSelected: (_) => _selectWardrobe(w),
-                    );
-                  },
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                _palette == null
-                    ? '选一个造型与服饰开始调整；也可先上传照片，按照片配色重新生成'
-                    : '已按照片配色生成 3 种造型；点服饰标签可换款式，点角色不同部位有不同反应',
-                style: const TextStyle(fontSize: 11, color: Colors.grey),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  const Text('精细调整',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                  const SizedBox(width: 8),
-                  Text(
-                    _query.isEmpty
-                        ? '${AvatarTuningSchema.params.length} 项 · 当前：${_style.label}'
-                        : '匹配 ${_matchCount(_query)} 项',
-                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            if (!_tipDismissed) AnimatedEntrance(child: _tipBanner()),
-            AnimatedEntrance(child: _searchField()),
-            const SizedBox(height: 6),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                children: [
-                  for (final g in TuningGroup.values)
-                    _groupTile(g, tuning, _query),
-                  if (_adultVisible(_query)) _adultTile(tuning),
-                  const SizedBox(height: 6),
-                  const Text(
-                    '说明：所有调整都会写进导出的 .glb（含风格与逐项参数），'
-                    '悬浮窗会加载你最终保存的造型；人设身份仍由人设卡锁定。',
-                    style: TextStyle(fontSize: 11, color: Colors.grey),
-                  ),
-                ],
-              ),
-            ),
-            _bottomBar(),
-          ],
+          if (spec != null) _bottomBar(),
         ],
       ),
     );
   }
 
   Widget _header(PersonaVisualSpec? spec) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            Row(
-              children: [
-                const Icon(Icons.person_outline, size: 15),
-                const SizedBox(width: 6),
-                Text(
-                  '人设：${spec?.name ?? '（无角色）'}',
-                  style: const TextStyle(fontSize: 13),
-                ),
-                if (spec != null && spec.fingerprint.isNotEmpty)
-                  Text(' · 指纹 ${spec.fingerprint.substring(0, 8)}',
-                      style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                const Spacer(),
-                if (_personaList.length > 1)
-                  DropdownButton<String>(
-                    value: _personaId,
-                    isDense: true,
-                    underline: const SizedBox.shrink(),
-                    items: _personaList
-                        .map((p) => DropdownMenuItem(
-                              value: p.id,
-                              child: Text(p.name, style: const TextStyle(fontSize: 12)),
-                            ))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v == null) return;
-                      final p = _personaList.firstWhere((e) => e.id == v);
-                      setState(() {
-                        _personaId = v;
-                        _spec = PersonaVisualSpec.fromPersona(p);
-                        _dirty = true;
-                      });
-                      _rebuildAll();
-                    },
-                  ),
-              ],
+            const Icon(Icons.person_outline, size: 15),
+            const SizedBox(width: 6),
+            Text(
+              '人设：${spec?.name ?? '（无角色）'}',
+              style: const TextStyle(fontSize: 13),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.photo_library_outlined, size: 16),
-                    label: Text(
-                      _photoPath == null ? '上传照片（仅取配色）' : '更换参考照片',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    onPressed: _busy ? null : _pickPhoto,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (_photoPath != null)
-                  SizedBox(
-                    width: 42,
-                    height: 34,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: Image.file(
-                        File(_photoPath!),
-                        fit: BoxFit.cover,
-                        // 用户上传的照片可能是 4000×3000（≈48MB 位图），
-                        // 这里只显示 42×34 的缩略图，必须限制解码尺寸。
-                        cacheWidth: 126,
+            if (spec != null && spec.fingerprint.isNotEmpty)
+              Text(
+                ' · 指纹 ${spec.fingerprint.substring(0, 8)}',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+            const Spacer(),
+            if (_personaList.length > 1)
+              DropdownButton<String>(
+                value: _personaId,
+                isDense: true,
+                underline: const SizedBox.shrink(),
+                items: _personaList
+                    .map(
+                      (p) => DropdownMenuItem(
+                        value: p.id,
+                        child: Text(
+                          p.name,
+                          style: const TextStyle(fontSize: 12),
+                        ),
                       ),
-                    ),
-                  ),
-                if (_palette != null) ...[
-                  const SizedBox(width: 6),
-                  _swatch(_palette!.hairColor),
-                  _swatch(_palette!.outfitColor),
-                  _swatch(_palette!.accentColor),
-                  _swatch(_palette!.skinColor),
-                ],
-                if (_photoPath != null)
-                  IconButton(
-                    tooltip: '移除照片配色',
-                    icon: const Icon(Icons.close, size: 16),
-                    constraints: const BoxConstraints(),
-                    padding: const EdgeInsets.all(4),
-                    onPressed: _clearPhoto,
-                  ),
-              ],
-            ),
-            const Text(
-              '照片只用于提取发色 / 衣着 / 点缀 / 肤色，不做人脸扫描或照片重建；'
-              '角色的身份与五官结构始终来自人设卡。',
-              style: TextStyle(fontSize: 10.5, color: Colors.grey),
-            ),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  if (v == null) return;
+                  final p = _personaList.firstWhere((e) => e.id == v);
+                  setState(() {
+                    _personaId = v;
+                    _spec = PersonaVisualSpec.fromPersona(p);
+                    _syncAppearance(_spec);
+                    _dirty = true;
+                  });
+                  _rebuildAll();
+                },
+              ),
           ],
         ),
-      );
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.photo_library_outlined, size: 16),
+                label: Text(
+                  _photoPath == null ? '上传照片（仅取配色）' : '更换参考照片',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                onPressed: _busy ? null : _pickPhoto,
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (_photoPath != null)
+              SizedBox(
+                width: 42,
+                height: 34,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: Image.file(
+                    File(_photoPath!),
+                    fit: BoxFit.cover,
+                    // 用户上传的照片可能是 4000×3000（≈48MB 位图），
+                    // 这里只显示 42×34 的缩略图，必须限制解码尺寸。
+                    cacheWidth: 126,
+                  ),
+                ),
+              ),
+            if (_palette != null) ...[
+              const SizedBox(width: 6),
+              _swatch(_palette!.hairColor),
+              _swatch(_palette!.outfitColor),
+              _swatch(_palette!.accentColor),
+              _swatch(_palette!.skinColor),
+            ],
+            if (_photoPath != null)
+              IconButton(
+                tooltip: '移除照片配色',
+                icon: const Icon(Icons.close, size: 16),
+                constraints: const BoxConstraints(),
+                padding: const EdgeInsets.all(4),
+                onPressed: _clearPhoto,
+              ),
+          ],
+        ),
+        const Text(
+          '照片只用于提取发色 / 衣着 / 点缀 / 肤色，不做人脸扫描或照片重建；'
+          '角色的身份与五官结构始终来自人设卡。',
+          style: TextStyle(fontSize: 10.5, color: Colors.grey),
+        ),
+      ],
+    ),
+  );
 
   Widget _swatch(Color c) => Container(
-        width: 14,
-        height: 14,
-        margin: const EdgeInsets.only(right: 3),
-        decoration: BoxDecoration(
-          color: c,
-          border: Border.all(color: Colors.grey.shade400, width: 0.5),
-          borderRadius: BorderRadius.circular(3),
-        ),
-      );
+    width: 14,
+    height: 14,
+    margin: const EdgeInsets.only(right: 3),
+    decoration: BoxDecoration(
+      color: c,
+      border: Border.all(color: Colors.grey.shade400, width: 0.5),
+      borderRadius: BorderRadius.circular(3),
+    ),
+  );
 
-  Widget _groupTile(TuningGroup group, AvatarTuning tuning, [String query = '']) {
+  Widget _groupTile(
+    TuningGroup group,
+    AvatarTuning tuning, [
+    String query = '',
+  ]) {
     // 下体尺寸已移入「成人选项」栏目，不在常规分组里出现。
-    var params = AvatarTuningSchema.ofGroup(group)
-        .where((p) => p.key != 'genitalSize');
+    var params = AvatarTuningSchema.ofGroup(
+      group,
+    ).where((p) => p.key != 'genitalSize');
     if (query.isNotEmpty) {
       final lq = query.toLowerCase();
-      params = params.where((p) =>
-          p.label.toLowerCase().contains(lq) ||
-          p.key.toLowerCase().contains(lq));
+      params = params.where(
+        (p) =>
+            p.label.toLowerCase().contains(lq) ||
+            p.key.toLowerCase().contains(lq),
+      );
     }
     final list = params.toList();
     if (list.isEmpty) return const SizedBox.shrink();
@@ -754,8 +1040,10 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
         initiallyExpanded: false,
         tilePadding: const EdgeInsets.symmetric(horizontal: 12),
         childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-        title: Text('${group.label}（${list.length}）',
-            style: const TextStyle(fontSize: 13)),
+        title: Text(
+          '${group.label}（${list.length}）',
+          style: const TextStyle(fontSize: 13),
+        ),
         children: list.map((p) => _slider(p, tuning)).toList(),
       ),
     );
@@ -780,10 +1068,14 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
       child: Column(
         children: [
           SwitchListTile(
-            title: const Text('成人选项（下体建模）',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            subtitle: const Text('勾选后可在写实裸身模式下调整下体性别、尺寸与裸身显示',
-                style: TextStyle(fontSize: 10.5, color: Colors.grey)),
+            title: const Text(
+              '成人选项（下体建模）',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text(
+              '勾选后可在写实裸身模式下调整下体性别、尺寸与裸身显示',
+              style: TextStyle(fontSize: 10.5, color: Colors.grey),
+            ),
             value: _adultEnabled,
             activeThumbColor: AppTheme.accent,
             onChanged: _busy ? null : _setAdultEnabled,
@@ -796,14 +1088,14 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
                 children: [
                   const Text('裸身显示', style: TextStyle(fontSize: 12)),
                   const Spacer(),
-                  const Text('关=穿衣  开=裸身',
-                      style: TextStyle(fontSize: 10.5, color: Colors.grey)),
+                  const Text(
+                    '关=穿衣  开=裸身',
+                    style: TextStyle(fontSize: 10.5, color: Colors.grey),
+                  ),
                   Switch(
                     value: !tuning.clothed,
                     activeThumbColor: AppTheme.accent,
-                    onChanged: _busy
-                        ? null
-                        : (v) => _setClothedAll(!v),
+                    onChanged: _busy ? null : (v) => _setClothedAll(!v),
                   ),
                 ],
               ),
@@ -818,13 +1110,13 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
                     Padding(
                       padding: const EdgeInsets.only(left: 4),
                       child: ChoiceChip(
-                        label: Text(s.label,
-                            style: const TextStyle(fontSize: 11)),
+                        label: Text(
+                          s.label,
+                          style: const TextStyle(fontSize: 11),
+                        ),
                         selected: sex == s,
                         selectedColor: AppTheme.accent.withValues(alpha: 0.7),
-                        onSelected: _busy
-                            ? null
-                            : (_) => _setLowerSexAll(s),
+                        onSelected: _busy ? null : (_) => _setLowerSexAll(s),
                       ),
                     ),
                 ],
@@ -839,12 +1131,16 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
                     children: [
                       const SizedBox(
                         width: 86,
-                        child: Text('下体尺寸',
-                            style: TextStyle(fontSize: 12)),
+                        child: Text('下体尺寸', style: TextStyle(fontSize: 12)),
                       ),
                       const Spacer(),
-                      Text(size.toStringAsFixed(2),
-                          style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                      Text(
+                        size.toStringAsFixed(2),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey,
+                        ),
+                      ),
                       SizedBox(
                         width: 28,
                         height: 28,
@@ -856,7 +1152,8 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
                               ? null
                               : () => _setGenitalSizeAll(
                                   AvatarTuningSchema.byKey['genitalSize']!
-                                      .defaultFor(_style)),
+                                      .defaultFor(_style),
+                                ),
                         ),
                       ),
                     ],
@@ -895,14 +1192,18 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
             children: [
               SizedBox(
                 width: 118,
-                child: Text(p.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12)),
+                child: Text(
+                  p.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
+                ),
               ),
               const Spacer(),
-              Text(v.toStringAsFixed(2),
-                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              Text(
+                v.toStringAsFixed(2),
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
               SizedBox(
                 width: 28,
                 height: 28,
@@ -927,45 +1228,285 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
     );
   }
 
-  Widget _bottomBar() => Container(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_saved != null)
-              Text(
-                '${_saved!.style.label} · ${_saved!.filePath.split(Platform.pathSeparator).last}'
-                '${_dirty ? ' · 有未保存的修改' : ''}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+  /// 外置高精 GLB 面板：下载 / 启用 / 删除，以及不打折的边界说明。
+  ///
+  /// 这里刻意不用 SwitchListTile（工坊另有唯一的成人选项开关，测试与交互
+  /// 都依赖它），全部用按钮表达状态切换。
+  /// 用户点「按描述重建」：从风格默认值重新套用解析结果。
+  /// 显式动作，避免把用户手动微调的 87 项悄悄覆盖掉。
+  void _reapplyAppearance() {
+    final r = _appearance;
+    if (r == null || r.isEmpty) {
+      _toast('这张人设卡还没有填写外貌描述');
+      return;
+    }
+    setState(() {
+      _tunings = {
+        for (final s in AvatarStyle.values)
+          s: r.applyTo(AvatarTuning.forStyle(s)),
+      };
+      if (r.suggestedStyle != null) _style = r.suggestedStyle!;
+      _dirty = true;
+    });
+    _rebuildAll();
+    _toast('已按外貌描述重建：${r.summary}');
+  }
+
+  /// 外貌描述解析面板：把「识别了什么 / 没识别什么」如实摊开，
+  /// 不让用户以为 App 真的理解了任意自然语言。
+  Widget _appearancePanel() {
+    final r = _appearance;
+    final text = _spec?.appearance.trim() ?? '';
+    if (r == null || text.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.face_retouching_natural_outlined, size: 16),
+                  const SizedBox(width: 6),
+                  const Text(
+                    '外貌描述 → 造型',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    icon: const Icon(Icons.auto_fix_high, size: 14),
+                    label: const Text('按描述重建', style: TextStyle(fontSize: 11)),
+                    onPressed: _reapplyAppearance,
+                  ),
+                ],
               ),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.save_outlined, size: 16),
-                    label: const Text('生成并保存', style: TextStyle(fontSize: 12)),
-                    onPressed: _busy ? null : () => _generate(),
+              Text(text, style: const TextStyle(fontSize: 11)),
+              const SizedBox(height: 5),
+              Text(
+                '已识别：${r.summary}',
+                style: const TextStyle(fontSize: 10.5, color: Colors.green),
+              ),
+              if (r.unrecognized.isNotEmpty)
+                Text(
+                  '未识别（不生效）：${r.unrecognized.join('、')}',
+                  style: const TextStyle(fontSize: 10.5, color: Colors.orange),
+                ),
+              const SizedBox(height: 4),
+              const Text(
+                '本地关键词规则生成的程序化造型，不是写实建模；可在下方逐项继续手动微调。',
+                style: TextStyle(fontSize: 10, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _highPolyPanel() {
+    final store = _glbStore;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.view_in_ar_outlined, size: 16),
+                  const SizedBox(width: 6),
+                  const Text(
+                    '高精模型（外置下载）',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                  const Spacer(),
+                  if (_highPolyEnabled)
+                    TextButton(
+                      onPressed: () {
+                        final e = _activeHighPoly;
+                        if (e != null) _toggleHighPoly(e);
+                      },
+                      child: const Text(
+                        '切回程序化',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                '网页交付版同款 GLB，按需下载到本机，不占安装包体积。'
+                '有清晰眼睛、五官与布料贴图；相对程序化低多边形是数量级提升，'
+                '但仍属半写实风格化 3D，不是照片级真人。',
+                style: TextStyle(fontSize: 10.5, color: Colors.grey),
+              ),
+              if (store == null)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                    '当前环境无法访问应用私有目录，高精通道不可用（程序化造型不受影响）。',
+                    style: TextStyle(fontSize: 11, color: Colors.orange),
+                  ),
+                )
+              else ...[
+                for (final e in HighPolyGlbManifest.entries) _highPolyRow(e),
+                if (_highPolyBusy) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(value: _highPolyProgress),
+                  const SizedBox(height: 4),
+                  Text(
+                    _highPolyProgress == null
+                        ? '正在下载高精模型…'
+                        : '下载中 ${(_highPolyProgress! * 100).toStringAsFixed(0)}%',
+                    style: const TextStyle(fontSize: 10, color: Colors.grey),
+                  ),
+                ],
+                if (_highPolyError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      _highPolyError!,
+                      style: const TextStyle(fontSize: 10.5, color: Colors.red),
+                    ),
+                  ),
+                const SizedBox(height: 6),
+                const Text(
+                  '边界（重要）：这两份模型无骨骼、无动画，不会动；'
+                  '87 项调参、服饰切换、分部位点击与「生成并保存 .glb」都不作用于它。'
+                  '需要这些能力请切回程序化造型。'
+                  '另外预览区是 WebView，上下滑动会用于旋转模型；'
+                  '要滚动页面请在预览区之外（本卡片或下方区域）滑动。',
+                  style: TextStyle(fontSize: 10, color: Colors.grey),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '下载源：PC 运行 python tools/gguf_server.py '
+                  '--dir ./tools/gguf_models --advertise-host 127.0.0.1，'
+                  'USB 连手机后执行 adb reverse tcp:8080 tcp:8080，再点下载。'
+                  '首次约 48 MB / 31 MB，支持断点续传与 SHA-256 校验。',
+                  style: TextStyle(fontSize: 10, color: Colors.grey),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _highPolyRow(HighPolyGlbEntry e) {
+    final ready = _highPolyReady[e.id] ?? false;
+    final active = _highPolyEnabled && _highPolyId == e.id;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  e.name,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Text(
+                '${e.sizeLabel} · ${e.triangles} 三角形 · ${e.textures} 贴图',
+                style: const TextStyle(fontSize: 10, color: Colors.grey),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            e.note,
+            style: const TextStyle(fontSize: 10, color: Colors.grey),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              if (!ready)
+                FilledButton.tonal(
+                  onPressed: _highPolyBusy ? null : () => _downloadHighPoly(e),
+                  child: Text(
+                    '下载 ${e.sizeLabel}',
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                )
+              else ...[
+                FilledButton.tonal(
+                  onPressed: _highPolyBusy ? null : () => _toggleHighPoly(e),
+                  child: Text(
+                    active ? '切回程序化' : '启用高精',
+                    style: const TextStyle(fontSize: 11),
                   ),
                 ),
                 const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.desktop_windows_outlined, size: 16),
-                    label: const Text('应用为悬浮窗', style: TextStyle(fontSize: 12)),
-                    onPressed: _busy ? null : _applyToOverlay,
-                  ),
+                TextButton(
+                  onPressed: _highPolyBusy ? null : () => _deleteHighPoly(e),
+                  child: const Text('删除', style: TextStyle(fontSize: 11)),
                 ),
               ],
+              const SizedBox(width: 8),
+              Text(
+                ready ? (active ? '● 已启用' : '✓ 已就绪') : '未下载',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: active ? Colors.green : Colors.grey,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomBar() => Container(
+    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surface,
+      border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_saved != null)
+          Text(
+            '${_saved!.style.label} · ${_saved!.filePath.split(Platform.pathSeparator).last}'
+            '${_dirty ? ' · 有未保存的修改' : ''}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+          ),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.save_outlined, size: 16),
+                label: const Text('生成并保存', style: TextStyle(fontSize: 12)),
+                onPressed: _busy ? null : () => _generate(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.desktop_windows_outlined, size: 16),
+                label: const Text('应用为悬浮窗', style: TextStyle(fontSize: 12)),
+                onPressed: _busy ? null : _applyToOverlay,
+              ),
             ),
           ],
         ),
-      );
+      ],
+    ),
+  );
 
   /// 操作流程进度条：把「选角色 → 选造型 → 微调 → 生成 → 应用」可视化，
   /// 让用户始终知道自己在哪一步、下一步做什么；照片为可选步骤单独标出。
@@ -1041,11 +1582,14 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
                 color: AppTheme.accent,
               ),
             ),
-          Text('$label${optional ? ' · 可选' : ''}',
-              style: TextStyle(
-                  fontSize: 11,
-                  color: fg,
-                  fontWeight: (current || done) ? FontWeight.w500 : FontWeight.w400)),
+          Text(
+            '$label${optional ? ' · 可选' : ''}',
+            style: TextStyle(
+              fontSize: 11,
+              color: fg,
+              fontWeight: (current || done) ? FontWeight.w500 : FontWeight.w400,
+            ),
+          ),
         ],
       ),
     );
@@ -1053,43 +1597,48 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
 
   /// 没有角色时的空状态：引导用户先去创建角色（跳转到角色创建页）。
   Widget _emptyStage(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.person_add_alt_1_outlined,
-                  size: 34,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withValues(alpha: 0.35)),
-              const SizedBox(height: 10),
-              const Text('还没有角色',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-              const SizedBox(height: 6),
-              Text('先在「角色」里创建一个，再来雕刻 3D 造型',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.55)),
-                  textAlign: TextAlign.center),
-              const SizedBox(height: 14),
-              PressScale(
-                child: FittedBox(
-                  child: FilledButton.icon(
-                    icon: const Icon(Icons.add),
-                    label: const Text('去创建角色'),
-                    onPressed: _busy ? null : _goCreateRole,
-                  ),
-                ),
-              ),
-            ],
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.person_add_alt_1_outlined,
+            size: 34,
+            color: Theme.of(
+              context,
+            ).colorScheme.onSurface.withValues(alpha: 0.35),
           ),
-        ),
-      );
+          const SizedBox(height: 10),
+          const Text(
+            '还没有角色',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '先在「角色」里创建一个，再来雕刻 3D 造型',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(
+                context,
+              ).colorScheme.onSurface.withValues(alpha: 0.55),
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 14),
+          PressScale(
+            child: FittedBox(
+              child: FilledButton.icon(
+                icon: const Icon(Icons.add),
+                label: const Text('去创建角色'),
+                onPressed: _busy ? null : _goCreateRole,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 
   /// 跳转到角色创建页，返回后刷新人设列表与当前造型。
   Future<void> _goCreateRole() async {
@@ -1100,78 +1649,82 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
 
   /// 调参区搜索框：在 87 项里按名称/键快速定位。
   Widget _searchField() => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: TextField(
-          controller: _searchCtl,
-          onChanged: (v) => setState(() => _query = v.trim()),
-          decoration: InputDecoration(
-            hintText: '搜索调整项，如 眼型 / 腰 / 镜头',
-            hintStyle: const TextStyle(fontSize: 12),
-            prefixIcon: const Icon(Icons.search, size: 18),
-            isDense: true,
-            filled: true,
-            fillColor: Theme.of(context).colorScheme.surface,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: Theme.of(context).dividerColor),
-            ),
-            suffixIcon: _query.isNotEmpty
-                ? IconButton(
-                    icon: const Icon(Icons.clear, size: 16),
-                    onPressed: () {
-                      _searchCtl.clear();
-                      setState(() => _query = '');
-                    },
-                  )
-                : null,
-          ),
+    padding: const EdgeInsets.symmetric(horizontal: 16),
+    child: TextField(
+      controller: _searchCtl,
+      onChanged: (v) => setState(() => _query = v.trim()),
+      decoration: InputDecoration(
+        hintText: '搜索调整项，如 眼型 / 腰 / 镜头',
+        hintStyle: const TextStyle(fontSize: 12),
+        prefixIcon: const Icon(Icons.search, size: 18),
+        isDense: true,
+        filled: true,
+        fillColor: Theme.of(context).colorScheme.surface,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: Theme.of(context).dividerColor),
         ),
-      );
+        suffixIcon: _query.isNotEmpty
+            ? IconButton(
+                icon: const Icon(Icons.clear, size: 16),
+                onPressed: () {
+                  _searchCtl.clear();
+                  setState(() => _query = '');
+                },
+              )
+            : null,
+      ),
+    ),
+  );
 
   /// 可关闭的新手提示条：一句话讲清操作方式，降低上手门槛。
   Widget _tipBanner() => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppTheme.accent.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-                color: AppTheme.accent.withValues(alpha: 0.30), width: 0.5),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.lightbulb_outline, size: 15, color: AppTheme.accent),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  '拖动滑杆实时预览；点角色不同部位会有不同反应；'
-                  '所有调整都会写进导出的 .glb。',
-                  style: TextStyle(fontSize: 11, color: Colors.grey),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 14),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                onPressed: () => setState(() => _tipDismissed = true),
-              ),
-            ],
-          ),
+    padding: const EdgeInsets.symmetric(horizontal: 16),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: AppTheme.accent.withValues(alpha: 0.30),
+          width: 0.5,
         ),
-      );
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.lightbulb_outline, size: 15, color: AppTheme.accent),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              '拖动滑杆实时预览；点角色不同部位会有不同反应；'
+              '所有调整都会写进导出的 .glb。',
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 14),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: () => setState(() => _tipDismissed = true),
+          ),
+        ],
+      ),
+    ),
+  );
 
   int _matchCount(String q) {
     final lq = q.toLowerCase();
     var n = 0;
     for (final g in TuningGroup.values) {
       n += AvatarTuningSchema.ofGroup(g)
-          .where((p) =>
-              p.key != 'genitalSize' &&
-              (p.label.toLowerCase().contains(lq) ||
-                  p.key.toLowerCase().contains(lq)))
+          .where(
+            (p) =>
+                p.key != 'genitalSize' &&
+                (p.label.toLowerCase().contains(lq) ||
+                    p.key.toLowerCase().contains(lq)),
+          )
           .length;
     }
     return n;
@@ -1218,8 +1771,9 @@ BoxDecoration _stageGlow(BuildContext context) {
       center: const Alignment(0, 0.18),
       radius: 0.85,
       colors: [
-        (light ? AppTheme.seed : Colors.white)
-            .withValues(alpha: light ? 0.10 : 0.05),
+        (light ? AppTheme.seed : Colors.white).withValues(
+          alpha: light ? 0.10 : 0.05,
+        ),
         Colors.transparent,
       ],
     ),
@@ -1289,9 +1843,13 @@ class _StyleCard extends StatelessWidget {
                       padding: EdgeInsets.only(right: 3),
                       child: Icon(Icons.check_circle, size: 12),
                     ),
-                  Text(style.label,
-                      style: const TextStyle(
-                          fontSize: 11.5, fontWeight: FontWeight.w500)),
+                  Text(
+                    style.label,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1312,8 +1870,10 @@ class _StaticPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final pose = AvatarAnimator(spec, mesh.bones)
-        .pose(0, mood: 'happy', action: '', actionAge: 99);
+    final pose = AvatarAnimator(
+      spec,
+      mesh.bones,
+    ).pose(0, mood: 'happy', action: '', actionAge: 99);
     AvatarPainter(
       mesh: mesh,
       skinMatrices: pose.skinMatrices,

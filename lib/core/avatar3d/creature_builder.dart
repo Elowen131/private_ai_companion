@@ -49,14 +49,19 @@ Color _geneColor(Map<String, String> genes, String key, Color fallback) {
   final h = v.codeUnits.fold<int>(0, (a, c) => (a * 31 + c) & 0x7fffffff);
   final hues = [18.0, 32.0, 48.0, 190.0, 210.0, 265.0, 310.0, 340.0];
   final hue = hues[h % hues.length] + (h % 17);
-  return HSLColor.fromAHSL(1, hue, 0.55 + (h % 20) / 100, 0.52 + (h % 13) / 100)
-      .toColor();
+  return HSLColor.fromAHSL(
+    1,
+    hue,
+    0.55 + (h % 20) / 100,
+    0.52 + (h % 13) / 100,
+  ).toColor();
 }
 
 List<Bone> _creatureBones(String plan) {
   // 与 AvatarBones.names 顺序严格一致，动画器无需感知造型来源。
   // 四足：躯干水平，头在 +X 前方；人形：头在 +Y 上方。
-  final quadruped = plan == PetBodyPlanValues.quadruped ||
+  final quadruped =
+      plan == PetBodyPlanValues.quadruped ||
       plan == PetBodyPlanValues.reptile ||
       plan == PetBodyPlanValues.draconic ||
       plan == PetBodyPlanValues.arthropod;
@@ -122,9 +127,7 @@ List<Bone> _creatureBones(String plan) {
   ];
   final bones = <Bone>[];
   for (var i = 0; i < AvatarBones.count; i++) {
-    final rest = parents[i] < 0
-        ? joints[i]
-        : joints[i] - joints[parents[i]];
+    final rest = parents[i] < 0 ? joints[i] : joints[i] - joints[parents[i]];
     bones.add(Bone(AvatarBones.names[i], parents[i], rest));
   }
   for (var i = 0; i < bones.length; i++) {
@@ -164,18 +167,30 @@ AvatarMesh buildCreatureAvatar(CreatureSpec s) {
   final glowStrength = s.t('glow', 0.0).clamp(0.0, 1.0);
   final plan = s.bodyPlan;
 
-  if (plan == PetBodyPlanValues.elemental || plan == PetBodyPlanValues.botanical) {
+  if (plan == PetBodyPlanValues.elemental ||
+      plan == PetBodyPlanValues.botanical) {
     _buildElemental(mb, s, base, accent, glow, aura, glowStrength);
   } else if (plan == PetBodyPlanValues.aquatic) {
     _buildAquatic(mb, s, scaleBase, accent, eye, headScale);
-  } else if (plan == PetBodyPlanValues.avian || plan == PetBodyPlanValues.celestial) {
+  } else if (plan == PetBodyPlanValues.avian ||
+      plan == PetBodyPlanValues.celestial) {
     _buildAvian(mb, s, base, accent, eye, headScale, limb, glow, aura);
   } else if (plan == PetBodyPlanValues.humanoid) {
     _buildHumanoid(mb, s, base, accent, eye, headScale, limb);
   } else {
-    _buildQuadruped(mb, s, scaleBase, accent, eye, headScale, limb, glow, aura,
-        draconic: plan == PetBodyPlanValues.draconic,
-        arthropod: plan == PetBodyPlanValues.arthropod);
+    _buildQuadruped(
+      mb,
+      s,
+      scaleBase,
+      accent,
+      eye,
+      headScale,
+      limb,
+      glow,
+      aura,
+      draconic: plan == PetBodyPlanValues.draconic,
+      arthropod: plan == PetBodyPlanValues.arthropod,
+    );
   }
 
   mb.applyQualityFinish();
@@ -206,16 +221,23 @@ void _leg(
 }) {
   mb.tag(tag);
   mb.taperedCylinder(
-      bottom: bottom, top: top, rBottom: r * 0.8, rTop: r,
-      color: col, bone: bone, segments: 10);
+    bottom: bottom,
+    top: top,
+    rBottom: r * 0.8,
+    rTop: r,
+    color: col,
+    bone: bone,
+    segments: 10,
+  );
   mb.tag('${tag}Paw');
   mb.sphere(
-      center: bottom,
-      radius: Vec3(r * 1.25, r * 0.7, r * 1.1),
-      color: col,
-      bone: bone,
-      lat: 6,
-      lon: 10);
+    center: bottom,
+    radius: Vec3(r * 1.25, r * 0.7, r * 1.1),
+    color: col,
+    bone: bone,
+    lat: 6,
+    lon: 10,
+  );
 }
 
 void _eyePair(
@@ -231,33 +253,42 @@ void _eyePair(
   for (final entry in [(left, boneL, 'L'), (right, boneR, 'R')]) {
     mb.tag('eyeWhite${entry.$3}');
     mb.sphere(
-        center: entry.$1,
-        radius: const Vec3(0.085, 0.095, 0.05),
-        color: const Color(0xFFFBF3EA),
-        bone: entry.$2,
-        lat: 8,
-        lon: 10);
+      center: entry.$1,
+      radius: const Vec3(0.085, 0.095, 0.05),
+      color: const Color(0xFFFBF3EA),
+      bone: entry.$2,
+      lat: 8,
+      lon: 10,
+    );
     mb.tag('pupil${entry.$3}');
     mb.sphere(
-        center: entry.$1 + const Vec3(0.045, 0, 0.012),
-        radius: const Vec3(0.048, 0.062, 0.035),
-        color: fantasy ? glow : eye,
-        bone: entry.$2,
-        lat: 8,
-        lon: 10);
+      center: entry.$1 + const Vec3(0.045, 0, 0.012),
+      radius: const Vec3(0.048, 0.062, 0.035),
+      color: fantasy ? glow : eye,
+      bone: entry.$2,
+      lat: 8,
+      lon: 10,
+    );
     mb.tag('spark${entry.$3}');
     mb.sphere(
-        center: entry.$1 + const Vec3(0.068, 0.026, 0.050),
-        radius: const Vec3(0.018, 0.022, 0.012),
-        color: Colors.white,
-        bone: entry.$2,
-        lat: 5,
-        lon: 7);
+      center: entry.$1 + const Vec3(0.068, 0.026, 0.050),
+      radius: const Vec3(0.018, 0.022, 0.012),
+      color: Colors.white,
+      bone: entry.$2,
+      lat: 5,
+      lon: 7,
+    );
   }
 }
 
 void _wing(
-    MeshBuilder mb, Vec3 root, double sign, Color col, int bone, String tag) {
+  MeshBuilder mb,
+  Vec3 root,
+  double sign,
+  Color col,
+  int bone,
+  String tag,
+) {
   mb.tag(tag);
   final start = mb.vertexCount;
   const n = Vec3(0, 0, 1);
@@ -277,7 +308,12 @@ void _wing(
 }
 
 void _fantasyEffects(
-    MeshBuilder mb, CreatureSpec s, Color glow, double aura, double glowStrength) {
+  MeshBuilder mb,
+  CreatureSpec s,
+  Color glow,
+  double aura,
+  double glowStrength,
+) {
   if (!s.fantasy) return;
   final strength = math.max(aura, glowStrength);
   if (strength <= 0.01) return;
@@ -285,15 +321,20 @@ void _fantasyEffects(
   final n = 8 + (strength * 8).round();
   for (var i = 0; i < n; i++) {
     final a = 2 * math.pi * i / n;
-    final c = Vec3(0.35 + 0.95 * math.cos(a), 1.05 + 0.72 * math.sin(a), 0.18 * math.cos(a * 2));
+    final c = Vec3(
+      0.35 + 0.95 * math.cos(a),
+      1.05 + 0.72 * math.sin(a),
+      0.18 * math.cos(a * 2),
+    );
     mb.tag('auraGlow$i');
     mb.sphere(
-        center: c,
-        radius: Vec3(0.052 + 0.03 * strength, 0.052 + 0.03 * strength, 0.04),
-        color: glow.withValues(alpha: 0.78),
-        bone: AvatarBones.star,
-        lat: 5,
-        lon: 7);
+      center: c,
+      radius: Vec3(0.052 + 0.03 * strength, 0.052 + 0.03 * strength, 0.04),
+      color: glow.withValues(alpha: 0.78),
+      bone: AvatarBones.star,
+      lat: 5,
+      lon: 7,
+    );
   }
   // 灵纹：额心/背脊三道细条，用扁平三角带绘制（无贴图）。
   for (var k = 0; k < 3; k++) {
@@ -315,6 +356,123 @@ void _fantasyEffects(
   }
 }
 
+/// 四足动物的「物种轮廓」。
+///
+/// 旧版 34 个四足二级品类（家猫 / 家犬 / 兔 / 仓鼠 / 狐 / 矮马…）共用
+/// 同一副椭球躯干 + 4 根等长圆柱 + 一根固定锥尾，只有颜色不同，所以
+/// 看上去全都不像日常动物。这里按 `genes` 里的 `ear / tail / coat`
+/// 推导耳型、尾型、口鼻长度与体型比例，让轮廓至少可区分。
+///
+/// 仍是纯 Dart 低多边形程序化几何，**不是写实建模**；要照片级真实度
+/// 必须外置写实 GLB（见 `pet_glb_assets.dart`）。
+class _QuadrupedShape {
+  const _QuadrupedShape({
+    required this.earRound,
+    required this.earDroop,
+    required this.earLength,
+    required this.earRadius,
+    required this.tailFluffy,
+    required this.tailShort,
+    required this.tailCurly,
+    required this.tailLength,
+    required this.tailRadius,
+    required this.snoutLength,
+    required this.bodyX,
+    required this.bodyY,
+    required this.legHeight,
+  });
+
+  final bool earRound;
+  final bool earDroop;
+  final double earLength;
+  final double earRadius;
+  final bool tailFluffy;
+  final bool tailShort;
+  final bool tailCurly;
+  final double tailLength;
+  final double tailRadius;
+  final double snoutLength;
+  final double bodyX;
+  final double bodyY;
+  final double legHeight;
+}
+
+_QuadrupedShape _quadrupedShape(Map<String, String> genes, double limb) {
+  final ear = genes['ear'] ?? '';
+  final tail = genes['tail'] ?? '';
+  final coat = genes['coat'] ?? '';
+
+  final earRound = ear.contains('圆耳') || ear.contains('小耳');
+  final earDroop = ear.contains('垂耳') || ear.contains('侧耳');
+  final earLong =
+      ear.contains('长耳') ||
+      ear.contains('巨耳') ||
+      ear.contains('大耳') ||
+      ear.contains('香蕉耳');
+  final earLength = earRound
+      ? 0.14
+      : earLong
+      ? 0.50
+      : 0.28;
+  final earRadius = earRound ? 0.13 : 0.10;
+
+  final tailFluffy =
+      tail.contains('蓬') ||
+      tail.contains('绒') ||
+      tail.contains('鬃') ||
+      tail.contains('环纹');
+  final tailShort =
+      tail.contains('极短') || tail.contains('短尾') || tail.contains('无尾');
+  final tailCurly = tail.contains('卷');
+  final tailLength = tailShort
+      ? 0.22
+      : tailFluffy
+      ? 0.72
+      : 0.60;
+  final tailRadius = tailFluffy
+      ? 0.20
+      : tailShort
+      ? 0.09
+      : 0.11;
+
+  // 尖耳 / 垂耳 + 长或蓬尾 → 犬型长吻；圆耳 / 长耳 → 猫兔型短吻。
+  final canine = (ear.contains('尖耳') || ear.contains('垂耳')) && !earRound;
+  final snoutLength = canine ? 0.22 : 0.13;
+
+  // 仓鼠 / 刺猬矮胖短腿；雪貂 / 水獭细长；其余常规。
+  final compact = earRound || coat.contains('棘刺') || tail.contains('极短');
+  final elongated = coat.contains('白鼬') || tail.contains('扁尾');
+  final bodyX = elongated
+      ? 0.94
+      : compact
+      ? 0.62
+      : 0.78;
+  final bodyY = compact ? 0.50 : 0.42;
+  final legHeight =
+      (compact
+          ? 0.52
+          : elongated
+          ? 0.66
+          : 0.78) *
+      limb;
+
+  return _QuadrupedShape(
+    earRound: earRound,
+    earDroop: earDroop,
+    earLength: earLength,
+    earRadius: earRadius,
+    tailFluffy: tailFluffy,
+    tailShort: tailShort,
+    tailCurly: tailCurly,
+    tailLength: tailLength,
+    tailRadius: tailRadius,
+    snoutLength: snoutLength,
+    bodyX: bodyX,
+    bodyY: bodyY,
+    legHeight: legHeight,
+  );
+}
+
 void _buildQuadruped(
   MeshBuilder mb,
   CreatureSpec s,
@@ -328,71 +486,197 @@ void _buildQuadruped(
   bool draconic = false,
   bool arthropod = false,
 }) {
-  _body(mb, const Vec3(0.20, 0.98, 0), const Vec3(0.78, 0.42, 0.40), base,
-      AvatarBones.chest, 'torso');
-  _body(mb, const Vec3(1.08, 1.14, 0), Vec3(0.34 * headScale, 0.32 * headScale, 0.30 * headScale),
-      base, AvatarBones.head, 'face');
-  // 口鼻
+  final g = _quadrupedShape(s.genes, limb);
+
+  _body(
+    mb,
+    const Vec3(0.20, 0.98, 0),
+    Vec3(g.bodyX, g.bodyY, 0.40),
+    base,
+    AvatarBones.chest,
+    'torso',
+  );
+  _body(
+    mb,
+    const Vec3(1.08, 1.14, 0),
+    Vec3(0.34 * headScale, 0.32 * headScale, 0.30 * headScale),
+    base,
+    AvatarBones.head,
+    'face',
+  );
+
+  // 口鼻：犬/狐长吻、猫兔短吻；前端补一个深色鼻头，避免「没有五官」。
+  final snoutX = 1.30 + g.snoutLength * 0.35;
   mb.tag('snout');
   mb.sphere(
-      center: const Vec3(1.34, 1.06, 0),
-      radius: Vec3(0.16 * headScale, 0.12, 0.14),
-      color: accent,
-      bone: AvatarBones.head,
-      lat: 8,
-      lon: 12);
-  // 耳 / 角
+    center: Vec3(snoutX, 1.06, 0),
+    radius: Vec3(g.snoutLength, 0.11, 0.13),
+    color: accent,
+    bone: AvatarBones.head,
+    lat: 8,
+    lon: 12,
+  );
+  mb.tag('nose');
+  mb.sphere(
+    center: Vec3(snoutX + g.snoutLength * 0.78, 1.08, 0),
+    radius: const Vec3(0.052, 0.045, 0.060),
+    color: const Color(0xFF3A2B28),
+    bone: AvatarBones.head,
+    lat: 7,
+    lon: 10,
+  );
+
+  // 耳：圆耳（仓鼠）/ 垂耳（犬、羊）/ 长耳（兔、耳廓狐）/ 尖立耳（狐、猫）。
   for (final side in [-1, 1]) {
     final z = side * 0.19;
     final bone = side < 0 ? AvatarBones.hairL : AvatarBones.hairR;
-    mb.tag(side < 0 ? 'earL' : 'earR');
-    mb.taperedCylinder(
+    final tag = side < 0 ? 'earL' : 'earR';
+    mb.tag(tag);
+    if (g.earRound) {
+      mb.sphere(
+        center: Vec3(1.02, 1.42, z * 1.35),
+        radius: Vec3(g.earRadius, g.earRadius * 1.1, 0.07),
+        color: accent,
+        bone: bone,
+        lat: 8,
+        lon: 10,
+      );
+    } else if (g.earDroop) {
+      mb.taperedCylinder(
         bottom: Vec3(1.02, 1.40, z),
-        top: Vec3(0.98, 1.68 + (draconic ? 0.16 : 0), z * 1.5),
-        rBottom: 0.10,
+        top: Vec3(1.10, 1.40 - g.earLength, z * 1.7),
+        rBottom: g.earRadius,
+        rTop: g.earRadius * 0.45,
+        color: accent,
+        bone: bone,
+        segments: 9,
+      );
+    } else {
+      mb.taperedCylinder(
+        bottom: Vec3(1.02, 1.40, z),
+        top: Vec3(0.98, 1.40 + g.earLength + (draconic ? 0.16 : 0), z * 1.5),
+        rBottom: g.earRadius,
         rTop: draconic ? 0.012 : 0.045,
         color: accent,
         bone: bone,
-        segments: 9);
+        segments: 9,
+      );
+    }
   }
-  // 四条腿
-  final h = 0.78 * limb;
-  _leg(mb, const Vec3(0.58, 0.68, -0.34), Vec3(0.66, 0.78 - h, -0.34), base,
-      AvatarBones.armL, 'upperArmL');
-  _leg(mb, const Vec3(0.58, 0.68, 0.34), Vec3(0.66, 0.78 - h, 0.34), base,
-      AvatarBones.armR, 'upperArmR');
-  _leg(mb, const Vec3(-0.26, 0.68, -0.32), Vec3(-0.30, 0.78 - h, -0.32), base,
-      AvatarBones.legL, 'thighL');
-  _leg(mb, const Vec3(-0.26, 0.68, 0.32), Vec3(-0.30, 0.78 - h, 0.32), base,
-      AvatarBones.legR, 'thighR');
-  // 尾
+
+  // 四条腿：腿长随体型方案变化（矮胖 / 细长 / 常规）。
+  final h = g.legHeight;
+  _leg(
+    mb,
+    const Vec3(0.58, 0.68, -0.34),
+    Vec3(0.66, 0.78 - h, -0.34),
+    base,
+    AvatarBones.armL,
+    'upperArmL',
+  );
+  _leg(
+    mb,
+    const Vec3(0.58, 0.68, 0.34),
+    Vec3(0.66, 0.78 - h, 0.34),
+    base,
+    AvatarBones.armR,
+    'upperArmR',
+  );
+  _leg(
+    mb,
+    const Vec3(-0.26, 0.68, -0.32),
+    Vec3(-0.30, 0.78 - h, -0.32),
+    base,
+    AvatarBones.legL,
+    'thighL',
+  );
+  _leg(
+    mb,
+    const Vec3(-0.26, 0.68, 0.32),
+    Vec3(-0.30, 0.78 - h, 0.32),
+    base,
+    AvatarBones.legR,
+    'thighR',
+  );
+
+  // 尾：蓬松 / 卷曲 / 短尾三种轮廓，蓬尾末端再补一团毛球。
+  final tailRoot = const Vec3(-0.52, 1.02, 0);
+  final tailTip = Vec3(
+    -0.52 - g.tailLength,
+    1.02 +
+        (g.tailCurly
+            ? 0.58
+            : g.tailShort
+            ? 0.04
+            : 0.30),
+    0,
+  );
   mb.tag('tail');
   mb.taperedCylinder(
-      bottom: const Vec3(-0.52, 1.02, 0),
-      top: const Vec3(-1.10, 1.34, 0),
-      rBottom: 0.13,
-      rTop: 0.03,
-      color: base,
+    bottom: tailRoot,
+    top: tailTip,
+    rBottom: g.tailRadius,
+    rTop: g.tailShort
+        ? 0.03
+        : g.tailFluffy
+        ? 0.10
+        : 0.03,
+    color: base,
+    bone: AvatarBones.star,
+    segments: 10,
+  );
+  if (g.tailFluffy) {
+    mb.tag('tailTuft');
+    mb.sphere(
+      center: tailTip,
+      radius: const Vec3(0.20, 0.17, 0.18),
+      color: accent,
       bone: AvatarBones.star,
-      segments: 10);
-  // 眼
-  _eyePair(mb, const Vec3(1.30, 1.20, -0.19), const Vec3(1.30, 1.20, 0.19),
-      eye, glow, AvatarBones.eyeL, AvatarBones.eyeR,
-      fantasy: s.fantasy);
+      lat: 8,
+      lon: 12,
+    );
+  }
+
+  // 眼：往脸部中间收一点，纯侧面视角时也更容易看到五官。
+  _eyePair(
+    mb,
+    const Vec3(1.32, 1.20, -0.155),
+    const Vec3(1.32, 1.20, 0.155),
+    eye,
+    glow,
+    AvatarBones.eyeL,
+    AvatarBones.eyeR,
+    fantasy: s.fantasy,
+  );
   if (draconic || s.genes['wing'] != null) {
-    _wing(mb, const Vec3(0.30, 1.28, -0.30), -1, accent, AvatarBones.armL, 'wingL');
-    _wing(mb, const Vec3(0.30, 1.28, 0.30), 1, accent, AvatarBones.armR, 'wingR');
+    _wing(
+      mb,
+      const Vec3(0.30, 1.28, -0.30),
+      -1,
+      accent,
+      AvatarBones.armL,
+      'wingL',
+    );
+    _wing(
+      mb,
+      const Vec3(0.30, 1.28, 0.30),
+      1,
+      accent,
+      AvatarBones.armR,
+      'wingR',
+    );
   }
   if (arthropod) {
     for (var i = 0; i < 3; i++) {
       mb.tag('shellPlate$i');
       mb.sphere(
-          center: Vec3(0.52 - i * 0.34, 1.34, 0),
-          radius: const Vec3(0.22, 0.09, 0.38),
-          color: accent,
-          bone: AvatarBones.chest,
-          lat: 6,
-          lon: 12);
+        center: Vec3(0.52 - i * 0.34, 1.34, 0),
+        radius: const Vec3(0.22, 0.09, 0.38),
+        color: accent,
+        bone: AvatarBones.chest,
+        lat: 6,
+        lon: 12,
+      );
     }
   }
   _fantasyEffects(mb, s, glow, aura, s.t('glow', 0));
@@ -409,44 +693,80 @@ void _buildAvian(
   Color glow,
   double aura,
 ) {
-  _body(mb, const Vec3(0, 1.12, 0), const Vec3(0.42, 0.56, 0.38), base,
-      AvatarBones.chest, 'torso');
-  _body(mb, const Vec3(0, 1.72, 0), Vec3(0.30 * headScale, 0.30 * headScale, 0.28),
-      base, AvatarBones.head, 'face');
+  _body(
+    mb,
+    const Vec3(0, 1.12, 0),
+    const Vec3(0.42, 0.56, 0.38),
+    base,
+    AvatarBones.chest,
+    'torso',
+  );
+  _body(
+    mb,
+    const Vec3(0, 1.72, 0),
+    Vec3(0.30 * headScale, 0.30 * headScale, 0.28),
+    base,
+    AvatarBones.head,
+    'face',
+  );
   mb.tag('beak');
   mb.taperedCylinder(
-      bottom: const Vec3(0.24, 1.68, 0),
-      top: const Vec3(0.48, 1.62, 0),
-      rBottom: 0.10,
-      rTop: 0.01,
-      color: accent,
-      bone: AvatarBones.head,
-      segments: 8);
-  _wing(mb, const Vec3(-0.16, 1.38, -0.30), -1, accent, AvatarBones.armL, 'wingL');
-  _wing(mb, const Vec3(-0.16, 1.38, 0.30), 1, accent, AvatarBones.armR, 'wingR');
+    bottom: const Vec3(0.24, 1.68, 0),
+    top: const Vec3(0.48, 1.62, 0),
+    rBottom: 0.10,
+    rTop: 0.01,
+    color: accent,
+    bone: AvatarBones.head,
+    segments: 8,
+  );
+  _wing(
+    mb,
+    const Vec3(-0.16, 1.38, -0.30),
+    -1,
+    accent,
+    AvatarBones.armL,
+    'wingL',
+  );
+  _wing(
+    mb,
+    const Vec3(-0.16, 1.38, 0.30),
+    1,
+    accent,
+    AvatarBones.armR,
+    'wingR',
+  );
   for (final side in [-1, 1]) {
     mb.tag(side < 0 ? 'legL' : 'legR');
     mb.taperedCylinder(
-        bottom: Vec3(0, 0.20, side * 0.16),
-        top: Vec3(0, 0.72, side * 0.16),
-        rBottom: 0.045,
-        rTop: 0.065,
-        color: accent,
-        bone: side < 0 ? AvatarBones.legL : AvatarBones.legR,
-        segments: 8);
+      bottom: Vec3(0, 0.20, side * 0.16),
+      top: Vec3(0, 0.72, side * 0.16),
+      rBottom: 0.045,
+      rTop: 0.065,
+      color: accent,
+      bone: side < 0 ? AvatarBones.legL : AvatarBones.legR,
+      segments: 8,
+    );
   }
   mb.tag('tailFeather');
   mb.taperedCylinder(
-      bottom: const Vec3(-0.34, 1.06, 0),
-      top: const Vec3(-0.92, 0.82, 0),
-      rBottom: 0.16,
-      rTop: 0.02,
-      color: accent,
-      bone: AvatarBones.star,
-      segments: 10);
-  _eyePair(mb, const Vec3(0.22, 1.78, -0.19), const Vec3(0.22, 1.78, 0.19),
-      eye, glow, AvatarBones.eyeL, AvatarBones.eyeR,
-      fantasy: s.fantasy);
+    bottom: const Vec3(-0.34, 1.06, 0),
+    top: const Vec3(-0.92, 0.82, 0),
+    rBottom: 0.16,
+    rTop: 0.02,
+    color: accent,
+    bone: AvatarBones.star,
+    segments: 10,
+  );
+  _eyePair(
+    mb,
+    const Vec3(0.22, 1.78, -0.19),
+    const Vec3(0.22, 1.78, 0.19),
+    eye,
+    glow,
+    AvatarBones.eyeL,
+    AvatarBones.eyeR,
+    fantasy: s.fantasy,
+  );
   _fantasyEffects(mb, s, glow, aura, s.t('glow', 0));
 }
 
@@ -458,35 +778,55 @@ void _buildAquatic(
   Color eye,
   double headScale,
 ) {
-  _body(mb, const Vec3(0, 1.10, 0), const Vec3(0.86, 0.38, 0.34), base,
-      AvatarBones.chest, 'torso');
+  _body(
+    mb,
+    const Vec3(0, 1.10, 0),
+    const Vec3(0.86, 0.38, 0.34),
+    base,
+    AvatarBones.chest,
+    'torso',
+  );
   mb.tag('head');
   mb.sphere(
-      center: const Vec3(0.78, 1.12, 0),
-      radius: Vec3(0.30 * headScale, 0.28, 0.26),
-      color: base,
-      bone: AvatarBones.head,
-      lat: 10,
-      lon: 14);
+    center: const Vec3(0.78, 1.12, 0),
+    radius: Vec3(0.30 * headScale, 0.28, 0.26),
+    color: base,
+    bone: AvatarBones.head,
+    lat: 10,
+    lon: 14,
+  );
   for (final side in [-1, 1]) {
-    _wing(mb, Vec3(-0.10, 1.16, side * 0.28), side.toDouble(), accent,
-        side < 0 ? AvatarBones.armL : AvatarBones.armR,
-        side < 0 ? 'finL' : 'finR');
+    _wing(
+      mb,
+      Vec3(-0.10, 1.16, side * 0.28),
+      side.toDouble(),
+      accent,
+      side < 0 ? AvatarBones.armL : AvatarBones.armR,
+      side < 0 ? 'finL' : 'finR',
+    );
   }
   mb.tag('tailFin');
   _wing(mb, const Vec3(-0.80, 1.10, 0), 1, accent, AvatarBones.star, 'tailFin');
   mb.tag('dorsalFin');
   mb.taperedCylinder(
-      bottom: const Vec3(-0.10, 1.40, 0),
-      top: const Vec3(-0.24, 1.78, 0),
-      rBottom: 0.14,
-      rTop: 0.01,
-      color: accent,
-      bone: AvatarBones.chest,
-      segments: 8);
-  _eyePair(mb, const Vec3(0.94, 1.18, -0.20), const Vec3(0.94, 1.18, 0.20),
-      eye, accent, AvatarBones.eyeL, AvatarBones.eyeR,
-      fantasy: s.fantasy);
+    bottom: const Vec3(-0.10, 1.40, 0),
+    top: const Vec3(-0.24, 1.78, 0),
+    rBottom: 0.14,
+    rTop: 0.01,
+    color: accent,
+    bone: AvatarBones.chest,
+    segments: 8,
+  );
+  _eyePair(
+    mb,
+    const Vec3(0.94, 1.18, -0.20),
+    const Vec3(0.94, 1.18, 0.20),
+    eye,
+    accent,
+    AvatarBones.eyeL,
+    AvatarBones.eyeR,
+    fantasy: s.fantasy,
+  );
   _fantasyEffects(mb, s, accent, s.t('aura', 0), s.t('glow', 0));
 }
 
@@ -501,46 +841,61 @@ void _buildElemental(
 ) {
   mb.tag('core');
   mb.sphere(
-      center: const Vec3(0, 1.16, 0),
-      radius: const Vec3(0.46, 0.52, 0.44),
-      color: base,
-      bone: AvatarBones.chest,
-      lat: 14,
-      lon: 18,
-      topColor: glow);
+    center: const Vec3(0, 1.16, 0),
+    radius: const Vec3(0.46, 0.52, 0.44),
+    color: base,
+    bone: AvatarBones.chest,
+    lat: 14,
+    lon: 18,
+    topColor: glow,
+  );
   mb.tag('innerCore');
   mb.sphere(
-      center: const Vec3(0.06, 1.22, 0.30),
-      radius: const Vec3(0.20, 0.22, 0.08),
-      color: glow,
-      bone: AvatarBones.chest,
-      lat: 8,
-      lon: 12);
-  _eyePair(mb, const Vec3(0.16, 1.30, -0.16), const Vec3(0.16, 1.30, 0.16),
-      accent, glow, AvatarBones.eyeL, AvatarBones.eyeR,
-      fantasy: true);
+    center: const Vec3(0.06, 1.22, 0.30),
+    radius: const Vec3(0.20, 0.22, 0.08),
+    color: glow,
+    bone: AvatarBones.chest,
+    lat: 8,
+    lon: 12,
+  );
+  _eyePair(
+    mb,
+    const Vec3(0.16, 1.30, -0.16),
+    const Vec3(0.16, 1.30, 0.16),
+    accent,
+    glow,
+    AvatarBones.eyeL,
+    AvatarBones.eyeR,
+    fantasy: true,
+  );
   final n = 7 + (aura * 6).round();
   for (var i = 0; i < n; i++) {
     final a = 2 * math.pi * i / n;
     mb.tag('orbit$i');
     mb.sphere(
-        center: Vec3(0.66 * math.cos(a), 1.16 + 0.62 * math.sin(a), 0.24 * math.cos(a * 2)),
-        radius: const Vec3(0.10, 0.10, 0.09),
-        color: i.isEven ? accent : glow,
-        bone: AvatarBones.star,
-        lat: 6,
-        lon: 8);
+      center: Vec3(
+        0.66 * math.cos(a),
+        1.16 + 0.62 * math.sin(a),
+        0.24 * math.cos(a * 2),
+      ),
+      radius: const Vec3(0.10, 0.10, 0.09),
+      color: i.isEven ? accent : glow,
+      bone: AvatarBones.star,
+      lat: 6,
+      lon: 8,
+    );
   }
   if (s.bodyPlan == PetBodyPlanValues.botanical) {
     for (final side in [-1, 1]) {
       mb.tag(side < 0 ? 'leafL' : 'leafR');
       mb.sphere(
-          center: Vec3(-0.10, 1.60, side * 0.22),
-          radius: const Vec3(0.24, 0.08, 0.14),
-          color: accent,
-          bone: side < 0 ? AvatarBones.hairL : AvatarBones.hairR,
-          lat: 6,
-          lon: 10);
+        center: Vec3(-0.10, 1.60, side * 0.22),
+        radius: const Vec3(0.24, 0.08, 0.14),
+        color: accent,
+        bone: side < 0 ? AvatarBones.hairL : AvatarBones.hairR,
+        lat: 6,
+        lon: 10,
+      );
     }
   }
   _fantasyEffects(mb, s, glow, math.max(aura, glowStrength), glowStrength);
@@ -555,32 +910,62 @@ void _buildHumanoid(
   double headScale,
   double limb,
 ) {
-  _body(mb, const Vec3(0, 1.24, 0), const Vec3(0.36, 0.44, 0.26), accent,
-      AvatarBones.chest, 'cloth');
-  _body(mb, const Vec3(0, 1.92, 0), Vec3(0.42 * headScale, 0.44 * headScale, 0.40),
-      base, AvatarBones.head, 'face');
+  _body(
+    mb,
+    const Vec3(0, 1.24, 0),
+    const Vec3(0.36, 0.44, 0.26),
+    accent,
+    AvatarBones.chest,
+    'cloth',
+  );
+  _body(
+    mb,
+    const Vec3(0, 1.92, 0),
+    Vec3(0.42 * headScale, 0.44 * headScale, 0.40),
+    base,
+    AvatarBones.head,
+    'face',
+  );
   mb.tag('hairShell');
   mb.sphere(
-      center: const Vec3(0, 2.06, -0.04),
-      radius: Vec3(0.44 * headScale, 0.34 * headScale, 0.42),
-      color: accent,
-      bone: AvatarBones.head,
-      lat: 10,
-      lon: 16,
-      latEnd: math.pi * 0.62);
+    center: const Vec3(0, 2.06, -0.04),
+    radius: Vec3(0.44 * headScale, 0.34 * headScale, 0.42),
+    color: accent,
+    bone: AvatarBones.head,
+    lat: 10,
+    lon: 16,
+    latEnd: math.pi * 0.62,
+  );
   for (final side in [-1, 1]) {
     final x = side * 0.44;
-    _leg(mb, Vec3(x, 1.42, 0), Vec3(x * 1.05, 1.42 - 0.62 * limb, 0), base,
-        side < 0 ? AvatarBones.armL : AvatarBones.armR,
-        side < 0 ? 'upperArmL' : 'upperArmR',
-        r: 0.10);
-    _leg(mb, Vec3(side * 0.18, 0.86, 0), Vec3(side * 0.18, 0.86 - 0.68 * limb, 0), accent,
-        side < 0 ? AvatarBones.legL : AvatarBones.legR,
-        side < 0 ? 'thighL' : 'thighR',
-        r: 0.12);
+    _leg(
+      mb,
+      Vec3(x, 1.42, 0),
+      Vec3(x * 1.05, 1.42 - 0.62 * limb, 0),
+      base,
+      side < 0 ? AvatarBones.armL : AvatarBones.armR,
+      side < 0 ? 'upperArmL' : 'upperArmR',
+      r: 0.10,
+    );
+    _leg(
+      mb,
+      Vec3(side * 0.18, 0.86, 0),
+      Vec3(side * 0.18, 0.86 - 0.68 * limb, 0),
+      accent,
+      side < 0 ? AvatarBones.legL : AvatarBones.legR,
+      side < 0 ? 'thighL' : 'thighR',
+      r: 0.12,
+    );
   }
-  _eyePair(mb, const Vec3(-0.16, 1.98, 0.37), const Vec3(0.16, 1.98, 0.37),
-      eye, accent, AvatarBones.eyeL, AvatarBones.eyeR,
-      fantasy: s.fantasy);
+  _eyePair(
+    mb,
+    const Vec3(-0.16, 1.98, 0.37),
+    const Vec3(0.16, 1.98, 0.37),
+    eye,
+    accent,
+    AvatarBones.eyeL,
+    AvatarBones.eyeR,
+    fantasy: s.fantasy,
+  );
   _fantasyEffects(mb, s, accent, s.t('aura', 0), s.t('glow', 0));
 }

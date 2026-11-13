@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img">
+  <title>同行</title>
+  <desc>两道不等长的竖向弧线平行而不相交，末端高低错落，像两条各自前行又始终同在的轨迹。</desc>
+  <rect x="0" y="0" width="512" height="512" rx="72" fill="#FBF9FF"/>
+  <g transform="rotate(6 256 256) translate(256 256) scale(0.9) translate(-256 -256)">
+    <path d="M 186 132 C 154 216 166 314 214 390"
+          fill="none" stroke="#7C5CFF" stroke-width="11" stroke-linecap="round"/>
+    <path d="M 296 156 C 274 226 282 300 318 356"
+          fill="none" stroke="#B9A6F5" stroke-width="8" stroke-linecap="round"/>
+  </g>
+</svg>
