@@ -157,6 +157,26 @@ App 内：进入「文生 3D（本地 AI）」页面 → 输入提示词（中�
 - 连不上服务时，页面会提示检查：①服务是否运行 ②地址/接线是否正确；
   若样例之前已缓存过本，点「样例」仍可离线查看。
 
+### 真机实测备忘（2026-11-14，Redmi / Windows 11）
+
+- **优先用办法 A**：手机侧
+  `adb shell "curl -s http://<电脑局域网IP>:8765/api/health"` 返回 200 即通。
+  Windows 防火墙要放行的是**监听进程**（常见为按程序规则，例如
+  `D:\python3.12\python.exe` → 允许入站 / Public / TCP 任意端口）；
+  只查「端口规则」会误判成被拦截。
+- `adb reverse` 依赖 **adb server 常驻**：由自动化/沙箱会话起的 daemon 一旦被回收，
+  映射立刻失效（手机侧 `127.0.0.1:8765` 变 `http=000`）。要走办法 B，请在用户自己的
+  终端执行并保持 daemon 存活；否则一律用办法 A。
+- **覆盖安装到已装更高版本号的真机**（如 versionCode 2001）会被 MIUI 以
+  `INSTALL_FAILED_VERSION_DOWNGRADE` 拒绝，`adb install -r -d` 也不一定放行。
+  用命令行提高构建号即可，无需改仓库文件：
+  ```bash
+  flutter build apk --release --target-platform android-arm64 --build-number 2002
+  adb install -r build/app/outputs/flutter-apk/app-release.apk
+  ```
+- 真机侧验证样例下发：`adb shell "curl -s -o /sdcard/cat.glb http://<IP>:8765/api/sample/cat"`，
+  文件头 4 字节应为 `67 6c 54 46`（`glTF`）。
+
 ---
 
 ## 4. 样例（服务下发 + App 缓存，不进 APK）
