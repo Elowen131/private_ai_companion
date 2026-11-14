@@ -130,6 +130,10 @@ web/icons/Icon-*.png
 /tools/text_to_3d/wheels/
 /tools/text_to_3d/.glb_cache/
 /tools/text_to_3d/__pycache__/
-# 本地权重（1.3GB+）与并行下载的分块缓存绝不入库；仅保留目录说明文件。
+# 本地权重（2GB+）与并行下载的分块缓存绝不入库；仅保留目录说明文件。
 /tools/text_to_3d/weights/openai_shap-e/*
 !/tools/text_to_3d/weights/openai_shap-e/README.txt
+# 生成中间产物（正式样例提交在 assets/route_c_samples/）
+/tools/text_to_3d/samples/
+/tools/text_to_3d/verify.glb
+/test_cat.glb

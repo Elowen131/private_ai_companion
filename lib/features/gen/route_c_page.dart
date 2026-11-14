@@ -31,6 +31,15 @@ class RouteCPage extends StatefulWidget {
 }
 
 class _RouteCPageState extends State<RouteCPage> {
+  // 推理参数按「纯 CPU 也能在几分钟内出图」配置。
+  // 实测（torch 2.15 CPU / 16 线程）：steps=16 / frame_size=64 约 2 分钟；
+  // 原来的 64 / 256 在 CPU 上要十几分钟，必然超过 HTTP 超时。
+  // 若 PC 服务跑在 NVIDIA GPU 上，可把这两个值提到 64 / 256 换取更精细网格。
+  static const int _kSteps = 16;
+  static const int _kFrameSize = 64;
+  // 留出余量：首次请求还包含模型加载，弱 CPU 可能更慢。
+  static const int _kTimeoutSeconds = 900;
+
   final _promptCtl = TextEditingController();
   final _hostCtl = TextEditingController(text: '127.0.0.1:8765');
 
@@ -112,11 +121,11 @@ class _RouteCPageState extends State<RouteCPage> {
             body: jsonEncode({
               'prompt': en,
               'guidance_scale': 15.0,
-              'num_inference_steps': 64,
-              'frame_size': 256,
+              'num_inference_steps': _kSteps,
+              'frame_size': _kFrameSize,
             }),
           )
-          .timeout(const Duration(seconds: 180));
+          .timeout(const Duration(seconds: _kTimeoutSeconds));
 
       if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
         throw StateError('服务返回 ${resp.statusCode}，无法生成模型');
