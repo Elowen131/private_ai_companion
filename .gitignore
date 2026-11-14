@@ -118,3 +118,15 @@ web/icons/Icon-*.png
 # 服务端脚本 tools/gguf_server.py 与清单逻辑仍然入库。
 # ---------------------------------------------------------------------------
 /tools/gguf_models/
+
+# ---------------------------------------------------------------------------
+# 路线 C 本地文生 3D 工具（tools/text_to_3d/）
+# 虚拟环境、安装日志、磁盘缓存与生成产物缓存都不入库：
+# 权重首次从 hf-mirror.com 拉取，GLB 由 generate.py 重新生成或随包分发。
+# ---------------------------------------------------------------------------
+/tools/text_to_3d/.venv/
+/tools/text_to_3d/install_torch.log
+/tools/text_to_3d/install_deps.log
+/tools/text_to_3d/wheels/
+/tools/text_to_3d/.glb_cache/
+/tools/text_to_3d/__pycache__/

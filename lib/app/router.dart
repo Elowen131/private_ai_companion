@@ -5,6 +5,7 @@ import 'package:private_ai_companion/features/role_create/role_create_page.dart'
 import 'package:private_ai_companion/features/chat/chat_page.dart';
 import 'package:private_ai_companion/features/settings/model_catalog_page.dart';
 import 'package:private_ai_companion/features/life/life_game_page.dart';
+import 'package:private_ai_companion/features/gen/route_c_page.dart';
 
 /// 路由表 —— 全 App 页面跳转的唯一真源。
 ///
@@ -18,6 +19,7 @@ class AppRouter {
   static const String settings = '/settings';
   static const String modelCatalog = '/model/catalog';
   static const String lifeGame = '/life';
+  static const String routeC = '/route-c';
 
   static Route<dynamic> generate(RouteSettings routeSettings) {
     switch (routeSettings.name) {
@@ -54,6 +56,10 @@ class AppRouter {
       case lifeGame:
         return MaterialPageRoute(
           builder: (_) => const LifeGamePage(),
+        );
+      case routeC:
+        return MaterialPageRoute(
+          builder: (_) => const RouteCPage(),
         );
       default:
         return MaterialPageRoute(builder: (_) => const AppShell());
@@ -107,4 +113,8 @@ class AppRouter {
 
   static Future<T?> openModelCatalog<T extends Object?>(BuildContext context) =>
       Navigator.of(context).pushNamed<T>(modelCatalog);
+
+  /// 打开路线 C（文生 3D）页面。
+  static Future<T?> openRouteC<T extends Object?>(BuildContext context) =>
+      Navigator.of(context).pushNamed<T>(routeC);
 }
