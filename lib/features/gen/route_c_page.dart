@@ -272,6 +272,44 @@ class _RouteCPageState extends State<RouteCPage> {
     }
   }
 
+  /// 从本地服务重新拉取全部样例（覆盖写，下载失败时旧缓存仍在，离线不丢）。
+  Future<void> _refreshSamples() async {
+    final store = _store;
+    if (store == null) {
+      _toast('当前环境无法访问应用私有目录，无法刷新样例');
+      return;
+    }
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _status = '正在从本地服务重新拉取样例…';
+      _src = null;
+      _srcLabel = null;
+    });
+    try {
+      var ok = 0;
+      for (final s in routeCSamples) {
+        await store.loadSample(s, baseUrl: _baseUrl, forceRefresh: true);
+        ok++;
+      }
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _status = null;
+      });
+      _toast('已更新 $ok 个样例（毛绒版）');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _status = null;
+        _error = '刷新样例失败：$e\n'
+            '请先确认本页服务地址可用、电脑上的 server.py 正在运行。';
+      });
+    }
+  }
+
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(
@@ -526,16 +564,23 @@ class _RouteCPageState extends State<RouteCPage> {
               Icon(Icons.inventory_2_outlined, size: 16, color: cs.primary),
               const SizedBox(width: 6),
               const Text(
-                '样例 · 清晰可辨认的卡通模型',
+                '样例 · 毛绒质感的卡通模型',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _busy ? null : _refreshSamples,
+                icon: const Icon(Icons.refresh, size: 14),
+                label: const Text('刷新样例', style: TextStyle(fontSize: 10.5)),
               ),
             ],
           ),
           const SizedBox(height: 4),
           const Text(
-            '这批样例由本地程序化建模生成（小狗、小猫、小龙、机器人、木椅、花朵），'
-            '形体与配色明确，不是 AI 糊出来的团块。模型不随包分发（PRD 11.3）：'
-            '首次点样例由本地服务下发并缓存，之后无服务、无网也能直接渲染。',
+            '这批样例由本地 SDF 融合曲面程序化建模生成：头、身、四肢、耳朵、尾巴'
+            '在一张连续曲面上平滑过渡，动物表面另加短绒几何与织物光泽。'
+            '模型不随包分发（PRD 11.3）：首次点样例由本地服务下发并缓存，'
+            '之后无服务、无网也能直接渲染；服务端换过造型后点「刷新样例」即可更新。',
             style: TextStyle(fontSize: 10.5, color: Colors.grey),
           ),
           const SizedBox(height: 8),

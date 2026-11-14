@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""生成本地高质量样例 GLB —— 纯程序化建模，零下载 / 零花费 / 零 GPU。
+"""生成 App 里的六个样例 GLB —— 纯程序化建模，零下载 / 零花费 / 零 GPU。
 
-为什么不继续用 Shap-E 的产物当样例
-----------------------------------
-Shap-E(text300M) 是 2023 年的早期文生 3D 模型，在 CPU 上把
-num_inference_steps 降到 16、frame_size 降到 64 后，输出是一团无法辨认的
-融化状网格：所谓「狗」只有一坨躯干、头尾不分、腿粘连；「龙」直接散架成碎片。
-拿这种东西当 App 里的展示资产是不诚实的。
-
-本脚本用基本几何体拼装**一眼可辨认**的卡通模型：
-  dog / cat / dragon / robot / chair / flower
-每个部件独立配色（顶点色，glTF COLOR_0，App 的 three.js 渲染器可直接显示），
-带平滑法线，导出为体积极小的 GLB。
+三代演进（都是为了「亲眼看过再交付」）
+------------------------------------
+1. Shap-E text300M @ CPU：融化状团块，所谓「狗」头尾不分 → 已废弃。
+2. 基础几何体硬拼：能辨认，但球与圆柱相贯处是硬折线，没有毛绒质感 → 已废弃。
+3. 现在：SDF smooth-union 连续曲面（头/身/腿/耳/尾数学上平滑过渡）
+   + 表面短绒几何层 + 绒面噪声毛色 + glTF sheen 织物材质 + 高精度五官。
 
     python tools/text_to_3d/build_samples.py
-    python tools/text_to_3d/build_samples.py --out /some/dir
+    python tools/text_to_3d/build_samples.py --out /some/dir --only dog --res 64
 """
 from __future__ import annotations
 
@@ -29,393 +24,312 @@ import numpy as np
 import trimesh
 from trimesh.transformations import rotation_matrix
 
+from fuzzy_sdf import SDFShape
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(HERE, "samples")
 
+# 样例版本：App 端缓存文件名带此 rev，服务端换了模型后新 APK 不会读到旧缓存
+SAMPLE_REV = 2
 
-def _rgb(hex_color: str) -> np.ndarray:
-    h = hex_color.lstrip("#")
-    return np.array([int(h[i:i + 2], 16) for i in (0, 2, 4)] + [255], dtype=np.uint8)
-
-
-class Builder:
-    """收集带颜色的部件，最后合并成单个带顶点色的 mesh。"""
-
-    def __init__(self):
-        self.parts: list[trimesh.Trimesh] = []
-
-    @staticmethod
-    def _paint(mesh: trimesh.Trimesh, color: str) -> trimesh.Trimesh:
-        mesh = mesh.copy()
-        c = _rgb(color)
-        mesh.visual = trimesh.visual.ColorVisuals(
-            mesh=mesh,
-            vertex_colors=np.tile(c, (len(mesh.vertices), 1)),
-        )
-        return mesh
-
-    def sphere(self, center, radii, color, subdivisions=3):
-        m = trimesh.creation.icosphere(subdivisions=subdivisions, radius=1.0)
-        m.apply_scale(radii)
-        m.apply_translation(center)
-        self.parts.append(self._paint(m, color))
-        return self
-
-    def box(self, center, extents, color, rot=None):
-        m = trimesh.creation.box(extents=extents)
-        if rot is not None:
-            m.apply_transform(rot)
-        m.apply_translation(center)
-        self.parts.append(self._paint(m, color))
-        return self
-
-    def cylinder(self, start, end, radius, color, radius_top=None, sections=20):
-        """沿 start->end 的圆柱 / 圆台。
-
-        自己手工构造而非调用 trimesh.creation.cone：不同 trimesh 版本对
-        `radius2` / `radius_top` 的支持不一致，静默忽略后会把「等半径柱体」
-        画成尖锥（椅腿变成牙签）。手工构造彻底规避版本差异。
-        """
-        a, b = np.asarray(start, float), np.asarray(end, float)
-        d = b - a
-        length = float(np.linalg.norm(d))
-        if length < 1e-9:
-            return self
-        r0 = float(radius)
-        r1 = r0 if radius_top is None else float(radius_top)
-
-        angles = np.linspace(0.0, 2 * np.pi, sections, endpoint=False)
-        ca, sa = np.cos(angles), np.sin(angles)
-        bottom = np.column_stack([r0 * ca, r0 * sa, np.zeros(sections)])
-        verts = [bottom]
-        faces = []
-        if r1 > 1e-7:
-            top = np.column_stack([r1 * ca, r1 * sa, np.full(sections, length)])
-            verts.append(top)
-            off = sections
-            for i in range(sections):
-                j = (i + 1) % sections
-                faces.append([i, j, off + j])
-                faces.append([i, off + j, off + i])
-            # 顶盖：扇形三角化（保持全三角，避免 ragged faces）
-            for i in range(1, sections - 1):
-                faces.append([off, off + i, off + i + 1])
-        else:
-            # 尖顶：单个顶点
-            apex = sections
-            verts.append(np.array([[0.0, 0.0, length]]))
-            for i in range(sections):
-                j = (i + 1) % sections
-                faces.append([i, j, apex])
-        # 底盖：扇形三角化（反向绕序）
-        for i in range(1, sections - 1):
-            faces.append([0, i + 1, i])
-        m = trimesh.Trimesh(
-            vertices=np.vstack(verts), faces=np.asarray(faces, dtype=np.int64),
-            process=False,
-        )
-        m.apply_translation([0, 0, -length / 2])
-        # 对齐到 d
-        z = np.array([0.0, 0.0, 1.0])
-        v = np.cross(z, d / length)
-        c = float(np.dot(z, d / length))
-        if np.linalg.norm(v) > 1e-8:
-            R = rotation_matrix(np.arccos(np.clip(c, -1, 1)), v / np.linalg.norm(v))
-            m.apply_transform(R)
-        else:
-            axis = np.array([1.0, 0.0, 0.0])
-            R = rotation_matrix(np.arccos(np.clip(c, -1, 1)), axis)
-            m.apply_transform(R)
-        m.apply_translation((a + b) / 2)
-        self.parts.append(self._paint(m, color))
-        return self
-
-    def capsule(self, start, end, radius, color):
-        """一条圆头线段：中间圆柱 + 两端球。"""
-        self.cylinder(start, end, radius, color)
-        self.sphere(start, (radius,) * 3, color)
-        self.sphere(end, (radius,) * 3, color)
-        return self
-
-    def build(self) -> trimesh.Trimesh:
-        return trimesh.util.concatenate(self.parts)
+# ------------------------------------------------------------------ 通用五官
+BLACK = "#2B221E"
+EYE_WHITE = "#FCF8F0"
+GLINT = "#FFFFFF"
 
 
-_CONE_R2 = None
+def _eyes(s, *, x, y, z, white_r, pupil_r, iris_color,
+          pupil_color=BLACK, glint=True, exclude=0.135):
+    """一对「眼白 + 有色虹膜 + 瞳孔 + 高光」的高精度眼球。
+
+    全部作为 extras 叠加，不走 SDF 网格 —— 网格格子约 0.04，瞳孔/高光
+    比格子还小，交给等值面提取会被直接抹平。
+    """
+    for sgn in (-1, 1):
+        cx = sgn * x
+        s.ellipsoid_extra((cx, y, z), white_r, EYE_WHITE, exclude_radius=exclude)
+        s.ellipsoid_extra((cx * 1.02, y - 0.005, z + white_r[2] * 0.72),
+                          pupil_r, iris_color, exclude_radius=exclude * 0.9)
+        if pupil_color != iris_color:
+            s.ellipsoid_extra((cx * 1.02, y - 0.008, z + white_r[2] * 0.72 + pupil_r[2] * 0.65),
+                              (pupil_r[0] * 0.42, pupil_r[1] * 0.86, pupil_r[2] * 0.55),
+                              pupil_color)
+        if glint:
+            s.ellipsoid_extra(
+                (cx * 1.02 - 0.026, y + pupil_r[1] * 0.42,
+                 z + white_r[2] * 0.72 + pupil_r[2] * 0.82),
+                (0.026, 0.028, 0.016), GLINT, subdivisions=2,
+            )
 
 
-def _cone_accepts_radius2() -> bool:
-    global _CONE_R2
-    if _CONE_R2 is None:
-        import inspect
-        try:
-            sig = inspect.signature(trimesh.creation.cone)
-            _CONE_R2 = "radius2" in sig.parameters
-        except (TypeError, ValueError):
-            _CONE_R2 = False
-    return bool(_CONE_R2)
+# ------------------------------------------------------------------ 小狗
+def make_dog() -> SDFShape:
+    """奶油金幼犬：大头、垂耳、短粗腿、蓬松翘尾、胸口与四爪奶白。"""
+    s = SDFShape(blend_k=0.12, color_k=0.075)
+    FUR, EAR, CREAM = "#E9B979", "#B87C46", "#F8ECD6"
+
+    s.ellipsoid((0, 0.02, -0.16), (0.46, 0.42, 0.65), FUR)       # 躯干
+    s.ellipsoid((0, -0.12, 0.22), (0.33, 0.32, 0.34), CREAM)     # 胸腹
+    s.ellipsoid((0, 0.30, 0.34), (0.35, 0.32, 0.28), FUR)        # 前胸
+    s.ellipsoid((0, 0.68, 0.50), (0.49, 0.46, 0.44), FUR)        # 大头
+    s.ellipsoid((0, 0.50, 0.84), (0.29, 0.22, 0.27), CREAM)      # 口吻
+
+    for x in (-0.29, 0.29):
+        for z in (0.26, -0.50):
+            s.capsule((x, -0.18, z), (x, -0.68, z), 0.150, FUR)
+            s.sphere((x, -0.69, z + 0.05), 0.175, CREAM)          # 白爪
+
+    for sgn in (-1, 1):
+        x = sgn * 0.44
+        s.ellipsoid((x, 0.64, 0.46), (0.145, 0.27, 0.15), EAR,
+                    rot=rotation_matrix(sgn * 0.20, [0, 0, 1]))
+        s.sphere((x * 1.06, 0.41, 0.47), 0.135, EAR)              # 垂耳耳垂
+
+    s.chain([(0, 0.30, -0.74), (0, 0.48, -0.92), (0, 0.68, -0.98),
+             (0, 0.84, -0.88)], [0.140, 0.132, 0.112, 0.078], EAR)
+
+    s.ellipsoid_extra((0, 0.565, 1.075), (0.105, 0.085, 0.075), BLACK,
+                      exclude_radius=0.125)                        # 鼻头
+    _eyes(s, x=0.205, y=0.775, z=0.895,
+          white_r=(0.098, 0.108, 0.058), pupil_r=(0.066, 0.082, 0.048),
+          iris_color="#4A3025")
+    return s
 
 
-# ---------------------------------------------------------------- 狗
-def make_dog() -> trimesh.Trimesh:
-    """暖棕色卡通小狗：圆头、垂耳、黑鼻、四腿、翘尾、红项圈。"""
-    b = Builder()
-    FUR = "#D9A05B"
-    FUR_DARK = "#A9702F"
-    CREAM = "#F6E7CE"
-    BLACK = "#2A2622"
-    RED = "#D8483F"
+# ------------------------------------------------------------------ 小猫
+def make_cat() -> SDFShape:
+    """橘白幼猫：更大的圆头、圆润三角耳、琥珀大眼、粉鼻、蓬松竖尾。"""
+    s = SDFShape(blend_k=0.115, color_k=0.070)
+    ORANGE, DARK, WHITE = "#EDA86B", "#D2894C", "#FAF4E8"
 
-    # 躯干（前后略长）
-    b.sphere((0, 0.10, -0.18), (0.55, 0.48, 0.78), FUR)
-    b.sphere((0, 0.20, 0.30), (0.44, 0.44, 0.40), FUR)  # 胸
-    # 四条腿（前后腿分开、带脚掌）
-    for x in (-0.34, 0.34):
-        for z in (0.34, -0.62):
-            b.capsule((x, -0.22, z), (x, -0.80, z), 0.145, FUR_DARK)
-            b.sphere((x, -0.82, z + 0.06), (0.185, 0.12, 0.22), FUR_DARK)
-    # 头
-    b.sphere((0, 0.72, 0.58), (0.46, 0.44, 0.43), FUR)
-    # 口鼻（米白）+ 黑鼻头 + 嘴
-    b.sphere((0, 0.60, 0.94), (0.27, 0.20, 0.26), CREAM)
-    b.sphere((0, 0.66, 1.17), (0.115, 0.09, 0.085), BLACK)
-    b.cylinder((0, 0.55, 1.18), (0, 0.52, 1.20), 0.018, BLACK, sections=10)
-    # 眼睛 + 高光
-    for x in (-0.20, 0.20):
-        b.sphere((x, 0.82, 0.94), (0.085, 0.095, 0.065), BLACK)
-        b.sphere((x - 0.025, 0.855, 0.995), (0.028, 0.028, 0.018), "#FFFFFF")
-    # 下垂耳朵
-    for x in (-0.43, 0.43):
-        b.sphere((x, 0.66, 0.50), (0.155, 0.30, 0.13), FUR_DARK)
-    # 项圈
-    b.cylinder((0, 0.36, 0.42), (0, 0.46, 0.42), 0.375, RED, sections=24)
-    b.sphere((0, 0.30, 0.67), (0.075, 0.075, 0.055), "#F2C14E")
-    # 翘尾巴（三段递进）
-    b.capsule((0, 0.34, -0.86), (0, 0.58, -1.06), 0.105, FUR_DARK)
-    b.capsule((0, 0.58, -1.06), (0, 0.82, -1.02), 0.085, FUR_DARK)
-    return b.build()
+    s.ellipsoid((0, 0.02, -0.14), (0.44, 0.42, 0.62), ORANGE)
+    s.ellipsoid((0, -0.12, 0.20), (0.31, 0.31, 0.31), WHITE)
+    s.ellipsoid((0, 0.70, 0.48), (0.50, 0.47, 0.44), ORANGE)     # 头比狗更大更圆
+    s.ellipsoid((0, 0.52, 0.82), (0.26, 0.19, 0.22), WHITE)
+
+    for x in (-0.28, 0.28):
+        for z in (0.26, -0.48):
+            s.capsule((x, -0.18, z), (x, -0.66, z), 0.135, ORANGE)
+            s.sphere((x, -0.67, z + 0.05), 0.160, WHITE)
+
+    for sgn in (-1, 1):
+        x = sgn * 0.31
+        # 三个递变半径的球被 smooth-min 连成圆润三角耳，不会有尖锥的硬边
+        s.chain([(x, 1.00, 0.44), (x * 1.06, 1.16, 0.42), (x * 1.10, 1.30, 0.40)],
+                [0.150, 0.112, 0.052], ORANGE)
+        s.ellipsoid_extra((x * 1.02, 1.075, 0.545), (0.072, 0.125, 0.026),
+                          "#E79A9E", subdivisions=2)              # 内耳粉
+
+    s.chain([(0, 0.24, -0.70), (0, 0.48, -0.92), (0.06, 0.76, -0.94),
+             (0.12, 0.98, -0.86)], [0.118, 0.114, 0.100, 0.078], DARK)
+
+    s.ellipsoid_extra((0, 0.585, 1.015), (0.065, 0.050, 0.048), "#E28E95",
+                      exclude_radius=0.10)
+    _eyes(s, x=0.205, y=0.795, z=0.875,
+          white_r=(0.112, 0.122, 0.058), pupil_r=(0.078, 0.098, 0.048),
+          iris_color="#C9913F", pupil_color="#2C231D", exclude=0.145)
+    # 胡须：细长椭球，向两侧略张
+    for sgn in (-1, 1):
+        for dy, ang in ((-0.02, 0.12), (0.045, -0.10)):
+            s.ellipsoid_extra((sgn * 0.30, 0.545 + dy, 0.99),
+                              (0.20, 0.007, 0.007), WHITE, subdivisions=2,
+                              rot=rotation_matrix(sgn * ang, [0, 1, 0]))
+    return s
 
 
-# ---------------------------------------------------------------- 猫
-def make_cat() -> trimesh.Trimesh:
-    """橘白卡通猫：尖耳、大眼、粉鼻、胡须、竖长尾。"""
-    b = Builder()
-    ORANGE = "#E8944A"
-    ORANGE_D = "#C8762F"
-    WHITE = "#F7F1E4"
-    BLACK = "#2A2622"
-    PINK = "#E8888C"
+# ------------------------------------------------------------------ 小龙
+def make_dragon() -> SDFShape:
+    """薄荷绿毛绒小龙：圆润短角、软翼、背脊圆刺、粗尾，解剖连贯不散架。"""
+    s = SDFShape(blend_k=0.125, color_k=0.080)
+    GREEN, DEEP, BELLY = "#8FC79B", "#5E9C6C", "#EADDA9"
+    HORN, WING = "#F3E7C9", "#B4DBBD"
 
-    b.sphere((0, 0.06, -0.16), (0.48, 0.46, 0.70), ORANGE)
-    b.sphere((0, -0.02, 0.28), (0.34, 0.36, 0.32), WHITE)  # 胸白
+    s.ellipsoid((0, 0.10, -0.12), (0.48, 0.45, 0.66), GREEN)
+    s.ellipsoid((0, -0.06, 0.24), (0.34, 0.32, 0.32), BELLY)
+    s.capsule((0, 0.36, 0.28), (0, 0.68, 0.48), 0.255, GREEN)    # 脖子
+    s.ellipsoid((0, 0.84, 0.56), (0.44, 0.40, 0.42), GREEN)
+    s.ellipsoid((0, 0.72, 0.88), (0.28, 0.20, 0.26), GREEN)      # 吻
+
     for x in (-0.30, 0.30):
-        for z in (0.34, -0.58):
-            b.capsule((x, -0.26, z), (x, -0.78, z), 0.125, ORANGE_D)
-            b.sphere((x, -0.80, z + 0.05), (0.16, 0.10, 0.19), WHITE)
-    # 头（比狗更圆更大）
-    b.sphere((0, 0.70, 0.52), (0.48, 0.46, 0.44), ORANGE)
-    b.sphere((0, 0.60, 0.88), (0.26, 0.18, 0.16), WHITE)  # 口鼻白
-    # 尖耳（三角锥）+ 内耳粉
-    for x in (-0.30, 0.30):
-        b.cylinder((x, 0.98, 0.46), (x * 1.08, 1.32, 0.44), 0.16, ORANGE,
-                   radius_top=0.0, sections=4)
-        b.sphere((x, 1.03, 0.56), (0.075, 0.13, 0.03), PINK)
-    # 大眼（黑瞳 + 白眼白 + 高光）
-    for x in (-0.21, 0.21):
-        b.sphere((x, 0.76, 0.90), (0.135, 0.15, 0.07), WHITE)
-        b.sphere((x, 0.76, 0.965), (0.075, 0.12, 0.045), BLACK)
-        b.sphere((x - 0.03, 0.81, 1.005), (0.032, 0.035, 0.018), "#FFFFFF")
-    b.sphere((0, 0.65, 1.03), (0.065, 0.05, 0.045), PINK)
-    # 胡须
-    for x in (-1, 1):
-        for dy in (-0.02, 0.05):
-            b.cylinder((x * 0.14, 0.62 + dy, 1.00),
-                       (x * 0.52, 0.64 + dy * 2, 0.98), 0.012, WHITE, sections=8)
-    # 竖长尾
-    b.capsule((0, 0.22, -0.78), (0, 0.70, -1.00), 0.10, ORANGE_D)
-    b.capsule((0, 0.70, -1.00), (0.06, 1.02, -0.92), 0.085, ORANGE_D)
-    return b.build()
+        for z in (0.30, -0.48):
+            s.capsule((x, -0.16, z), (x, -0.66, z), 0.150, DEEP)
+            s.sphere((x, -0.67, z + 0.07), 0.185, DEEP)
+
+    for sgn in (-1, 1):
+        # 软翼：上扬的扁椭球 + 渐细翼尖，避免看起来像平伸的两条手臂
+        s.ellipsoid((sgn * 0.64, 0.66, -0.18), (0.52, 0.12, 0.42), WING,
+                    rot=rotation_matrix(sgn * 0.72, [0, 0, 1]))
+        s.chain([(sgn * 0.84, 0.88, -0.20), (sgn * 1.08, 1.02, -0.24)],
+                [0.085, 0.032], WING)
+        # 短角：向后掠、圆头，不做竖直长锥（否则像兔耳朵）
+        s.chain([(sgn * 0.22, 1.12, 0.48), (sgn * 0.30, 1.28, 0.36),
+                 (sgn * 0.34, 1.34, 0.28)], [0.075, 0.050, 0.025], HORN)
+
+    for z, h in ((0.10, 0.66), (-0.16, 0.60), (-0.42, 0.50)):
+        s.chain([(0, h - 0.08, z), (0, h + 0.10, z - 0.04)],
+                [0.075, 0.032], HORN)                              # 背脊圆刺
+
+    s.chain([(0, 0.18, -0.70), (0, 0.22, -0.98), (0.08, 0.30, -1.24),
+             (0.18, 0.40, -1.44)], [0.145, 0.120, 0.092, 0.055], DEEP)
+
+    _eyes(s, x=0.205, y=0.925, z=0.905,
+          white_r=(0.100, 0.108, 0.056), pupil_r=(0.064, 0.080, 0.046),
+          iris_color="#3E6B48", pupil_color=BLACK, exclude=0.13)
+    for sgn in (-1, 1):
+        s.ellipsoid_extra((sgn * 0.115, 0.79, 1.115),
+                          (0.030, 0.026, 0.020), "#4C7A55", subdivisions=2)
+    return s
 
 
-# ---------------------------------------------------------------- 龙
-def make_dragon() -> trimesh.Trimesh:
-    """绿色卡通小龙：角、吻部、双翼、背刺、四足、长尾。"""
-    b = Builder()
-    GREEN = "#5FA86A"
-    GREEN_D = "#3C7A4B"
-    BELLY = "#D8D48C"
-    HORN = "#F0E2B6"
-    BLACK = "#2A2622"
-    WING = "#8CC79A"
+# ------------------------------------------------------------------ 非动物：圆角化但无绒毛
+def make_robot() -> SDFShape:
+    """蓝黄圆角玩具机器人：倒角机体与四肢用 SDF 融合，衔接处没有硬缝。"""
+    s = SDFShape(blend_k=0.10, color_k=0.06)
+    BLUE, DEEP, YELLOW = "#4A7CB8", "#33598B", "#F2C14E"
+    DARK, GLOW = "#2A3542", "#8DE9F2"
 
-    b.sphere((0, 0.16, -0.10), (0.52, 0.50, 0.72), GREEN)
-    b.sphere((0, 0.02, 0.30), (0.36, 0.34, 0.36), BELLY)
-    # 四足
-    for x in (-0.34, 0.34):
-        for z in (0.34, -0.56):
-            b.capsule((x, -0.16, z), (x, -0.70, z), 0.15, GREEN_D)
-            b.sphere((x, -0.72, z + 0.09), (0.20, 0.11, 0.24), GREEN_D)
-    # 脖子 + 头
-    b.cylinder((0, 0.40, 0.30), (0, 0.78, 0.52), 0.24, GREEN, sections=20)
-    b.sphere((0, 0.90, 0.66), (0.40, 0.34, 0.40), GREEN)
-    b.sphere((0, 0.80, 0.98), (0.27, 0.19, 0.28), GREEN)  # 吻
-    for x in (-0.13, 0.13):
-        b.sphere((x, 0.86, 1.22), (0.035, 0.03, 0.03), BLACK)  # 鼻孔
-    for x in (-0.22, 0.22):
-        b.sphere((x, 0.98, 0.94), (0.09, 0.09, 0.06), BLACK)  # 眼
-        b.sphere((x - 0.025, 1.005, 0.985), (0.028, 0.028, 0.016), "#FFFFFF")
-        # 角
-        b.cylinder((x * 0.9, 1.14, 0.58), (x * 1.25, 1.46, 0.44),
-                   0.075, HORN, radius_top=0.0, sections=12)
-    # 双翼（扁平椭球，向外张开）
-    for s in (-1, 1):
-        wing = b.sphere((s * 0.72, 0.52, -0.16), (0.62, 0.10, 0.46), WING)
-        # 翼骨
-        b.cylinder((s * 0.30, 0.36, -0.12), (s * 1.28, 0.72, -0.26),
-                   0.035, GREEN_D, sections=10)
-    # 背刺
-    for z in (0.10, -0.18, -0.44):
-        b.cylinder((0, 0.58, z), (0, 0.90, z - 0.06), 0.09, HORN,
-                   radius_top=0.0, sections=6)
-    # 长尾
-    b.capsule((0, 0.20, -0.72), (0, 0.26, -1.16), 0.15, GREEN_D)
-    b.capsule((0, 0.26, -1.16), (0.14, 0.36, -1.52), 0.10, GREEN_D)
-    return b.build()
-
-
-# ---------------------------------------------------------------- 机器人
-def make_robot() -> trimesh.Trimesh:
-    """蓝黄卡通机器人：方头、发光眼、天线、双臂双腿。"""
-    b = Builder()
-    BLUE = "#3E6FB0"
-    BLUE_D = "#2A4E80"
-    YELLOW = "#F2C14E"
-    DARK = "#26303B"
-    EYE = "#7FE3F0"
-
-    b.box((0, 0.05, 0), (0.78, 0.86, 0.52), BLUE)
-    b.box((0, 0.10, 0.27), (0.44, 0.42, 0.04), YELLOW)  # 胸前面板
-    b.sphere((0, 0.10, 0.30), (0.10, 0.10, 0.025), EYE)
-    # 头
-    b.box((0, 0.82, 0), (0.66, 0.54, 0.50), BLUE)
-    b.box((0, 0.84, 0.255), (0.50, 0.30, 0.03), DARK)  # 面罩
-    for x in (-0.14, 0.14):
-        b.sphere((x, 0.85, 0.278), (0.075, 0.085, 0.022), EYE)
-    b.cylinder((0, 1.09, 0), (0, 1.36, 0), 0.028, DARK, sections=10)
-    b.sphere((0, 1.40, 0), (0.09, 0.09, 0.09), YELLOW)
-    # 耳朵
-    for x in (-0.37, 0.37):
-        b.box((x, 0.82, 0), (0.10, 0.24, 0.26), YELLOW)
-    # 手臂
+    s.round_box((0, 0.04, 0), (0.78, 0.84, 0.52), 0.16, BLUE)
+    s.round_box((0, 0.86, 0), (0.68, 0.56, 0.50), 0.14, BLUE)
+    s.capsule((0, 0.40, 0), (0, 0.62, 0), 0.13, DEEP)
     for x in (-0.50, 0.50):
-        b.capsule((x, 0.36, 0), (x, -0.14, 0), 0.10, BLUE_D)
-        b.sphere((x, -0.20, 0), (0.14, 0.14, 0.14), YELLOW)
-    # 腿
+        s.capsule((x, 0.34, 0), (x, -0.14, 0), 0.105, DEEP)
+        s.sphere((x, -0.19, 0), 0.135, YELLOW)
+        s.round_box((x * 0.77, 0.86, 0), (0.10, 0.24, 0.26), 0.045, YELLOW)
     for x in (-0.22, 0.22):
-        b.capsule((x, -0.38, 0), (x, -0.82, 0), 0.13, BLUE_D)
-        b.box((x, -0.86, 0.06), (0.30, 0.12, 0.42), DARK)
-    return b.build()
+        s.capsule((x, -0.38, 0), (x, -0.78, 0), 0.125, DEEP)
+        s.round_box((x, -0.82, 0.07), (0.30, 0.13, 0.42), 0.055, DARK)
+    s.capsule((0, 1.12, 0), (0, 1.34, 0), 0.028, DARK)
+    s.sphere((0, 1.39, 0), 0.085, YELLOW)
+
+    visor = trimesh.creation.box(extents=(0.50, 0.30, 0.035))
+    visor.apply_translation([0, 0.86, 0.262])
+    s.extra(visor, DARK)  # 面罩底
+    for x in (-0.145, 0.145):
+        s.ellipsoid_extra((x, 0.87, 0.288), (0.078, 0.086, 0.022), GLOW,
+                          subdivisions=2)
+    s.ellipsoid_extra((0, 0.06, 0.275), (0.105, 0.105, 0.025), GLOW,
+                      subdivisions=2)
+    s.ellipsoid_extra((0, 0.06, 0.298), (0.045, 0.045, 0.012), YELLOW,
+                      subdivisions=2)
+    return s
 
 
-# ---------------------------------------------------------------- 椅子
-def make_chair() -> trimesh.Trimesh:
-    """木椅：座面、靠背横档、四条腿。"""
-    b = Builder()
-    WOOD = "#B5793E"
-    WOOD_D = "#8C5628"
+def make_chair() -> SDFShape:
+    """木椅：座面 / 靠背 / 四腿用圆角 SDF 融合，像真实实木倒角家具。"""
+    s = SDFShape(blend_k=0.105, color_k=0.06)
+    WOOD, DEEP = "#B5793E", "#8C5628"
 
-    b.box((0, 0.05, 0), (1.00, 0.12, 0.92), WOOD)  # 座面
-    for x in (-0.42, 0.42):
-        for z in (-0.38, 0.38):
-            b.cylinder((x, 0.00, z), (x, -0.92, z), 0.075, WOOD_D, sections=12)
-    # 靠背立柱 + 两根横档
-    for x in (-0.42, 0.42):
-        b.cylinder((x, 0.10, -0.40), (x, 1.12, -0.40), 0.070, WOOD_D, sections=12)
-    for y in (0.72, 1.02):
-        b.box((0, y, -0.40), (0.94, 0.14, 0.10), WOOD)
-    return b.build()
+    s.round_box((0, 0.04, 0), (1.00, 0.14, 0.92), 0.055, WOOD)
+    for x in (-0.40, 0.40):
+        for z in (-0.37, 0.37):
+            s.capsule((x, 0.02, z), (x, -0.90, z), 0.075, DEEP)
+        s.capsule((x, 0.10, -0.40), (x, 1.10, -0.40), 0.070, DEEP)
+    for y in (0.70, 1.02):
+        s.round_box((0, y, -0.40), (0.92, 0.15, 0.11), 0.055, WOOD)
+    return s
 
 
-# ---------------------------------------------------------------- 花
-def make_flower() -> trimesh.Trimesh:
-    """粉色花朵：8 瓣、黄花心、绿茎、两片叶。"""
-    b = Builder()
-    PINK = "#EE8FB0"
-    PINK_D = "#D97198"
-    YELLOW = "#F5C542"
-    GREEN = "#4E9B5B"
-    GREEN_D = "#357A43"
+def make_flower() -> SDFShape:
+    """粉色柔润花朵：花瓣用倾斜椭球与花心自然融合，无硬拼接。"""
+    s = SDFShape(blend_k=0.075, color_k=0.05)
+    PINK, PINK_D, YELLOW = "#EE8FB0", "#D97198", "#F5C542"
+    GREEN, DEEP = "#4E9B5B", "#357A43"
 
-    b.cylinder((0, -0.95, 0), (0, 0.42, 0), 0.055, GREEN, sections=14)
-    # 叶片
-    for s in (-1, 1):
-        b.sphere((s * 0.30, -0.36, 0), (0.30, 0.11, 0.16), GREEN_D)
-    # 花瓣（绕 Z 轴一圈，朝外张开）
+    s.capsule((0, -0.95, 0), (0, 0.38, 0), 0.055, GREEN)
+    for sgn in (-1, 1):
+        s.ellipsoid((sgn * 0.30, -0.36, 0), (0.30, 0.10, 0.16), DEEP,
+                    rot=rotation_matrix(sgn * 0.30, [0, 0, 1]))
     for i in range(8):
         a = 2 * np.pi * i / 8
-        cx, cy = 0.34 * np.cos(a), 0.34 * np.sin(a)
-        m = trimesh.creation.icosphere(subdivisions=2, radius=1.0)
-        m.apply_scale((0.26, 0.17, 0.10))
-        m.apply_transform(rotation_matrix(a, [0, 0, 1]))
-        m.apply_translation((cx, cy, 0.52))
-        b.parts.append(Builder._paint(m, PINK if i % 2 == 0 else PINK_D))
-    b.sphere((0, 0, 0.60), (0.22, 0.22, 0.13), YELLOW)
-    b.sphere((0, 0, 0.70), (0.13, 0.13, 0.06), "#E8A92E")
-    return b.build()
+        c = np.array([0.34 * np.cos(a), 0.34 * np.sin(a), 0.52])
+        s.ellipsoid(c, (0.27, 0.17, 0.10), PINK if i % 2 == 0 else PINK_D,
+                    rot=rotation_matrix(a, [0, 0, 1]))
+    s.ellipsoid((0, 0, 0.58), (0.22, 0.22, 0.13), YELLOW)
+    s.ellipsoid_extra((0, 0, 0.685), (0.13, 0.13, 0.055), "#E8A92E",
+                      subdivisions=2)
+    return s
 
 
-def patch_glb(glb: bytes, mesh: trimesh.Trimesh) -> bytes:
-    """给 trimesh 导出的 GLB 补上平滑法线 + PBR 材质。
+BUILDERS = {
+    "dog": make_dog, "cat": make_cat, "dragon": make_dragon,
+    "robot": make_robot, "chair": make_chair, "flower": make_flower,
+}
+PROMPTS = {
+    "dog": "a cute fluffy cartoon dog", "cat": "a cute fluffy cartoon cat",
+    "dragon": "a cute green dragon", "robot": "a friendly robot",
+    "chair": "a wooden chair", "flower": "a pink flower",
+}
+NAMES = {
+    "dog": "小狗", "cat": "小猫", "dragon": "小龙",
+    "robot": "机器人", "chair": "木椅", "flower": "小花",
+}
+# 只有动物长绒毛；家具/机械/植物保持干净表面
+FURRY = {"dog", "cat", "dragon"}
 
-    trimesh 的 ColorVisuals 只写 POSITION/COLOR_0：没有 NORMAL 时 three.js 会
-    computeVertexNormals() 退化成硬边着色；没有 material 时部分版本会把
-    COLOR_0 忽略、显示成白模。这里在二进制层补齐，保证 App 里颜色与圆润度都在。
+
+def patch_glb(glb: bytes, normals: np.ndarray | None = None) -> bytes:
+    """补齐平滑法线 + 织物 sheen 材质。
+
+    trimesh 的 ColorVisuals 只写 POSITION/COLOR_0：缺 NORMAL 时 three.js 会
+    computeVertexNormals() 退化成硬边；缺 material 时部分版本会忽略 COLOR_0。
+    法线优先用传入的 SDF 梯度（比面法线平滑得多）。
+    KHR_materials_sheen 给绒毛/织物一层掠射角柔光，是「毛绒感」的材质部分。
     """
-    magic, version, total = struct.unpack_from("<4sII", glb, 0)
+    magic, version, _ = struct.unpack_from("<4sII", glb, 0)
     assert magic == b"glTF" and version == 2
     off = 12
-    json_len, json_type = struct.unpack_from("<I4s", glb, off)
+    json_len, _ = struct.unpack_from("<I4s", glb, off)
     off += 8
     doc = json.loads(glb[off:off + json_len].decode("utf-8"))
     off += json_len
-    bin_len, bin_type = struct.unpack_from("<I4s", glb, off)
+    bin_len, _ = struct.unpack_from("<I4s", glb, off)
     off += 8
     bin_data = bytearray(glb[off:off + bin_len])
-
-    # 面法线按面积加权累加到顶点（纯 NumPy，不依赖 scipy）
-    v = np.asarray(mesh.vertices, dtype=np.float64)
-    f = np.asarray(mesh.faces, dtype=np.int64)
-    fn = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
-    normals = np.zeros_like(v)
-    np.add.at(normals, f[:, 0], fn)
-    np.add.at(normals, f[:, 1], fn)
-    np.add.at(normals, f[:, 2], fn)
-    lens = np.linalg.norm(normals, axis=1)
-    lens[lens < 1e-12] = 1.0
-    normals = (normals / lens[:, None]).astype(np.float32)
 
     while len(bin_data) % 4:
         bin_data.append(0)
     nv_off = len(bin_data)
-    bin_data.extend(normals.tobytes())
+    nbytes = normals.astype(np.float32).tobytes()
+    bin_data.extend(nbytes)
 
     doc["buffers"][0]["byteLength"] = len(bin_data)
     doc["bufferViews"].append({
         "buffer": 0, "byteOffset": nv_off,
-        "byteLength": len(normals.tobytes()), "target": 34962,
+        "byteLength": len(nbytes), "target": 34962,
     })
     doc["accessors"].append({
         "bufferView": len(doc["bufferViews"]) - 1,
         "componentType": 5126, "count": len(normals), "type": "VEC3",
     })
+    # 导出的 POSITION 顶点数必须与法线数组一致，否则 accessor 会错位、GLB 直接损坏
+    npos = None
+    for m in doc["meshes"]:
+        for prim in m["primitives"]:
+            idx = prim.get("attributes", {}).get("POSITION")
+            if idx is not None:
+                npos = doc["accessors"][idx]["count"]
+                break
+    if npos is not None and npos != len(normals):
+        raise RuntimeError(f"GLB 顶点数错位：POSITION={npos} NORMAL={len(normals)}")
+
+    used = doc.get("extensionsUsed", [])
+    if "KHR_materials_sheen" not in used:
+        used = used + ["KHR_materials_sheen"]
+    doc["extensionsUsed"] = used
     doc["materials"] = [{
-        "name": "vertexColor",
+        "name": "fuzzyFabric",
         "pbrMetallicRoughness": {
             "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
             "metallicFactor": 0.0,
-            "roughnessFactor": 0.85,
+            "roughnessFactor": 0.95,
         },
         "doubleSided": True,
+        "extensions": {
+            "KHR_materials_sheen": {
+                "sheenColorFactor": [0.85, 0.85, 0.85],
+                "sheenRoughnessFactor": 0.85,
+            },
+        },
     }]
     for m in doc["meshes"]:
         for prim in m["primitives"]:
@@ -431,56 +345,50 @@ def patch_glb(glb: bytes, mesh: trimesh.Trimesh) -> bytes:
     return struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body
 
 
-BUILDERS = {
-    "dog": make_dog,
-    "cat": make_cat,
-    "dragon": make_dragon,
-    "robot": make_robot,
-    "chair": make_chair,
-    "flower": make_flower,
-}
-
-PROMPTS = {
-    "dog": "a cute cartoon dog",
-    "cat": "a cute cartoon cat",
-    "dragon": "a cute green dragon",
-    "robot": "a friendly robot",
-    "chair": "a wooden chair",
-    "flower": "a pink flower",
-}
-
-NAMES = {
-    "dog": "小狗", "cat": "小猫", "dragon": "小龙",
-    "robot": "机器人", "chair": "木椅", "flower": "小花",
-}
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--only", default=None, help="只生成指定 id，便于快速迭代")
+    ap.add_argument("--res", type=int, default=88, help="SDF 采样分辨率")
+    ap.add_argument("--fur", type=int, default=14000, help="绒毛根数（动物）")
+    ap.add_argument("--fur-length", type=float, default=0.020, help="绒毛长度")
+    ap.add_argument("--fur-radius", type=float, default=0.0045, help="绒毛根部半径")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
+    keys = [args.only] if args.only else list(BUILDERS)
     manifest = []
-    for key, fn in BUILDERS.items():
-        mesh = fn()
+    for key in keys:
+        shape = BUILDERS[key]()
+        res = args.res if key in FURRY else max(64, args.res - 16)
+        fur = args.fur if key in FURRY else 0
+        print(f"[build] {key} ...", flush=True)
+        mesh, normals = shape.build(
+            res=res, fur_count=fur,
+            seed={"dog": 7, "cat": 13, "dragon": 23}.get(key, 5),
+            fur_length=args.fur_length, fur_radius=args.fur_radius,
+            noise_strength=0.075 if key in FURRY else 0.025,
+        )
         buf = io.BytesIO()
         mesh.export(buf, file_type="glb")
-        data = patch_glb(buf.getvalue(), mesh)
+        data = patch_glb(buf.getvalue(), normals)
         path = os.path.join(args.out, f"{key}.glb")
         with open(path, "wb") as f:
             f.write(data)
         manifest.append({
-            "id": key,
-            "name": NAMES[key],
-            "prompt": PROMPTS[key],
-            "file": f"{key}.glb",
-            "source": "procedural",
+            "id": key, "name": NAMES[key], "prompt": PROMPTS[key],
+            "file": f"{key}.glb", "source": "procedural-sdf",
+            "rev": SAMPLE_REV,
         })
-        print(f"[build] {key:8s} verts={len(mesh.vertices):6d} "
-              f"faces={len(mesh.faces):6d} size={len(data)/1024:8.1f} KB")
+        print(f"[build] {key:8s} verts={len(mesh.vertices):7d} "
+              f"faces={len(mesh.faces):7d} size={len(data)/1024:8.1f} KB", flush=True)
 
-    import json
+    if args.only and os.path.exists(os.path.join(args.out, "manifest.json")):
+        with open(os.path.join(args.out, "manifest.json"), encoding="utf-8") as f:
+            old = json.load(f)
+        by_id = {m["id"]: m for m in old}
+        by_id.update({m["id"]: m for m in manifest})
+        manifest = [by_id[k] for k in BUILDERS if k in by_id]
     with open(os.path.join(args.out, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
     print(f"[build] manifest -> {os.path.join(args.out, 'manifest.json')}")

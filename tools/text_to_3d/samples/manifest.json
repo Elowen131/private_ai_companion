@@ -2,43 +2,49 @@
   {
     "id": "dog",
     "name": "小狗",
-    "prompt": "a cute cartoon dog",
+    "prompt": "a cute fluffy cartoon dog",
     "file": "dog.glb",
-    "source": "procedural"
+    "source": "procedural-sdf",
+    "rev": 2
   },
   {
     "id": "cat",
     "name": "小猫",
-    "prompt": "a cute cartoon cat",
+    "prompt": "a cute fluffy cartoon cat",
     "file": "cat.glb",
-    "source": "procedural"
+    "source": "procedural-sdf",
+    "rev": 2
   },
   {
     "id": "dragon",
     "name": "小龙",
     "prompt": "a cute green dragon",
     "file": "dragon.glb",
-    "source": "procedural"
+    "source": "procedural-sdf",
+    "rev": 2
   },
   {
     "id": "robot",
     "name": "机器人",
     "prompt": "a friendly robot",
     "file": "robot.glb",
-    "source": "procedural"
+    "source": "procedural-sdf",
+    "rev": 2
   },
   {
     "id": "chair",
     "name": "木椅",
     "prompt": "a wooden chair",
     "file": "chair.glb",
-    "source": "procedural"
+    "source": "procedural-sdf",
+    "rev": 2
   },
   {
     "id": "flower",
     "name": "小花",
     "prompt": "a pink flower",
     "file": "flower.glb",
-    "source": "procedural"
+    "source": "procedural-sdf",
+    "rev": 2
   }
 ]

@@ -64,6 +64,42 @@ def _vertex_colors_from_glb(path: str) -> np.ndarray | None:
     return np.vstack(chunks) if chunks else None
 
 
+def _vertex_normals_from_glb(path: str) -> np.ndarray | None:
+    """读 GLB 的 NORMAL accessor。
+
+    预览必须与真机一致：App 的 three.js / model-viewer 用顶点法线着色，
+    而这个软件渲染器原本用面法线。绒毛细锥的侧面法线是背光的，用面法线
+    会把每根绒毛画成一粒黑芝麻（假象），改成顶点法线后才是真实观感。
+    """
+    d = open(path, "rb").read()
+    magic, ver, _ = struct.unpack_from("<4sII", d, 0)
+    if magic != b"glTF" or ver != 2:
+        return None
+    off = 12
+    jlen, _ = struct.unpack_from("<I4s", d, off)
+    off += 8
+    doc = json.loads(d[off:off + jlen].decode("utf-8"))
+    off += jlen
+    blen, _ = struct.unpack_from("<I4s", d, off)
+    off += 8
+    bin_ = d[off:off + blen]
+    chunks = []
+    for m in doc.get("meshes", []):
+        for prim in m.get("primitives", []):
+            idx = prim.get("attributes", {}).get("NORMAL")
+            if idx is None:
+                continue
+            acc = doc["accessors"][idx]
+            bv = doc["bufferViews"][acc["bufferView"]]
+            start = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
+            if acc["componentType"] != 5126 or acc["type"] != "VEC3":
+                continue
+            arr = np.frombuffer(bin_, dtype=np.float32, count=acc["count"] * 3,
+                                offset=start).reshape(acc["count"], 3)
+            chunks.append(arr.astype(np.float64))
+    return np.vstack(chunks) if chunks else None
+
+
 def load_mesh(path: str) -> trimesh.Trimesh:
     scene = trimesh.load(path, force="scene")
     geoms = []
@@ -113,7 +149,8 @@ def look_at(eye, target=(0, 0, 0), up=(0, 1, 0)):
 
 
 def render(mesh: trimesh.Trimesh, size: int = 420, yaw: float = 35.0,
-           pitch: float = 18.0, bg=(248, 249, 252)) -> Image.Image:
+           pitch: float = 18.0, bg=(248, 249, 252),
+           vertex_normals: np.ndarray | None = None) -> Image.Image:
     """Z-buffer 光栅化 + Lambert 漫反射 + 顶点色插值。"""
     v = np.asarray(mesh.vertices, dtype=np.float64)
     f = np.asarray(mesh.faces, dtype=np.int32)
@@ -144,9 +181,13 @@ def render(mesh: trimesh.Trimesh, size: int = 420, yaw: float = 35.0,
     sx = (px * 0.5 + 0.5) * size
     sy = (0.5 - py * 0.5) * size
 
-    # 面法线（相机空间）用于光照
-    tri = cam[f]
-    n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    # 光照法线：优先用 GLB 的顶点法线（与 three.js 一致）；缺失时才退回面法线。
+    # 每个三角形取三顶点法线均值，保持逐面一个 diffuse 的开销不变。
+    if vertex_normals is not None and len(vertex_normals) == len(v):
+        n = vertex_normals[f].mean(axis=1) @ R.T
+    else:
+        tri = cam[f]
+        n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
     ln = np.linalg.norm(n, axis=1)
     ln[ln < 1e-12] = 1.0
     n /= ln[:, None]
@@ -217,11 +258,15 @@ def contact_sheet(paths, out: str, size: int = 380, cols: int = 3):
     for r, p in enumerate(paths):
         try:
             mesh = normalize(load_mesh(p))
+            vn = _vertex_normals_from_glb(p)
+            if vn is not None and len(vn) != len(mesh.vertices):
+                vn = None
         except Exception as e:  # noqa: BLE001
             print(f"[render] skip {p}: {e}")
             continue
         for c, (label, yaw, pitch) in enumerate(views):
-            img = render(mesh, size=size, yaw=yaw, pitch=pitch)
+            img = render(mesh, size=size, yaw=yaw, pitch=pitch,
+                         vertex_normals=vn)
             sheet.paste(img, (c * size, r * (size + 26)))
             d.text((c * size + 8, r * (size + 26) + size + 4),
                    f"{os.path.basename(p)}  /  {label}", fill=(30, 33, 40))

@@ -18,6 +18,11 @@ import 'package:path/path.dart' as p;
 ///
 /// 与 [HighPolyGlbStore] / [PetGlbStore] 同构但独立目录，互不覆盖。
 class RouteCGlbStore {
+  /// 样例资产版本。服务端 tools/text_to_3d/build_samples.py 的 SAMPLE_REV
+  /// 必须与这里一致。每次换样例造型就 +1：缓存文件名带 rev，新 APK 不会
+  /// 再读到上一代模型（旧版曾出现「服务端换了、手机还显示老狗」）。
+  static const int sampleRevision = 2;
+
   final String baseDir;
   RouteCGlbStore(this.baseDir);
 
@@ -25,7 +30,8 @@ class RouteCGlbStore {
   String get samplesDir => p.join(dir, 'samples');
 
   File _fileFor(String id) => File(p.join(dir, '$id.glb'));
-  File _sampleFileFor(String id) => File(p.join(samplesDir, '$id.glb'));
+  File _sampleFileFor(String id) =>
+      File(p.join(samplesDir, '${id}_v$sampleRevision.glb'));
 
   /// model-viewer 的 src：`File.uri` → `file:///.../x.glb`。
   String srcFor(File f) => f.uri.toString();
@@ -64,11 +70,15 @@ class RouteCGlbStore {
   /// 优先读应用私有目录里的缓存（**离线可用**）；尚未缓存时，用 [baseUrl]
   /// 从本地服务 `GET /api/sample/<id>` 下载一次并落盘。这样样例无需打进 APK，
   /// 又能在连过一次服务之后完全离线演示。
-  Future<String> loadSample(RouteCSample sample, {String? baseUrl}) async {
+  Future<String> loadSample(
+    RouteCSample sample, {
+    String? baseUrl,
+    bool forceRefresh = false,
+  }) async {
     final d = Directory(samplesDir);
     if (!await d.exists()) await d.create(recursive: true);
     final f = _sampleFileFor(sample.id);
-    if (!f.existsSync()) {
+    if (!f.existsSync() || forceRefresh) {
       final host = baseUrl?.trim() ?? '';
       if (host.isEmpty) {
         throw StateError('样例尚未缓存：请先连上本地服务再点一次样例（会自动下载并缓存）');
@@ -91,6 +101,25 @@ class RouteCGlbStore {
       await f.writeAsBytes(bytes, flush: true);
     }
     return srcFor(f);
+  }
+
+  /// 清掉本应用私有目录下的样例缓存（只删 .glb，不动实时生成产物）。
+  /// 返回删除数量，供 UI 提示。
+  Future<int> clearSampleCache() async {
+    final d = Directory(samplesDir);
+    if (!await d.exists()) return 0;
+    var n = 0;
+    await for (final entity in d.list()) {
+      if (entity is File && entity.path.endsWith('.glb')) {
+        try {
+          await entity.delete();
+          n++;
+        } catch (_) {
+          // 单个文件删不掉不影响其它缓存清理
+        }
+      }
+    }
+    return n;
   }
 
   /// 给实时生成产物算一个稳定 id（提示词 → 16 位 hex）。

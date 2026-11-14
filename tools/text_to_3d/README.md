@@ -197,24 +197,35 @@ App 内：进入「文生 3D（本地 AI）」页面 → 输入提示词（中�
 由本地服务的 `/api/sample/{id}` 按需下发。App 首次点样例时下载一次并缓存到
 应用私有目录 `route_c/samples/`，**之后无服务、无网也能直接渲染**。
 
-### 4.1 样例来源：程序化建模（不是 Shap-E）
+### 4.1 样例来源：SDF 融合曲面（不是 Shap-E）
 
-> ⚠️ **重要**：2026-11-14 起，样例改由 `build_samples.py` 程序化建模生成。
-> 原先 `generate.py` 用 Shap-E 在 CPU 上降参（steps=16 / frame_size=64）跑出来的
-> 产物是**融化状、无法辨认的团块**：所谓「狗」头尾不分、腿粘连，「龙」直接散架。
-> 拿这种东西当展示资产是不诚实的。请勿再运行 `generate.py` 覆盖样例目录，
-> 除非明确是要做「AI 生成能力验证」（结果会很难看）。
+> ⚠️ 2026-11-14 样例共三代：`generate.py`（Shap-E text300M @ CPU）产出的是
+> **融化状团块**；第二代基础几何体硬拼虽能辨认，但球/圆柱相贯处是硬折线、
+> 完全没有毛绒质感。现在用 `fuzzy_sdf.py` 的**有符号距离场 + 局部
+> polynomial smooth-min**：头、身、四肢、耳朵、尾巴在同一张连续曲面上平滑
+> 过渡（几何 C1 连续，法线直接取 SDF 梯度）；动物表面再叠一层短绒几何、
+> 绒面噪声毛色与 `KHR_materials_sheen` 织物材质。五官（眼白/瞳/高光/鼻头）
+> 比 SDF 网格格子还小，改用高精度球体单独叠加，并在周围清出无毛区。
+> 请勿再运行 `generate.py` 覆盖样例目录。
 
 ```bash
-# 生成 6 个可辨认的卡通模型（纯 NumPy/trimesh，零下载、零 GPU、约 3 秒）
+# 生成 6 个毛绒/圆角模型（纯 NumPy，零下载、零 GPU、约 15 秒）
 tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/build_samples.py
-# 产物：tools/text_to_3d/samples/{dog,cat,dragon,robot,chair,flower}.glb + manifest.json
+# 调参：--only dog --res 84 --fur 13000 --fur-length 0.018 --fur-radius 0.0038
+# 产物：samples/{dog,cat,dragon,robot,chair,flower}.glb + manifest.json
 ```
 
-生成的 GLB 带 `COLOR_0` 顶点色、`NORMAL` 平滑法线与 PBR 材质
-（App 的 model-viewer/three.js 可正确显示颜色，不会变白模）。
-脚本 `patch_glb()` 负责补齐法线与材质：trimesh 的 `ColorVisuals` 默认只写
-`POSITION/COLOR_0`，缺 NORMAL 会被 three.js 退化成硬边着色。
+GLB 带 `POSITION / COLOR_0 / NORMAL`、PBR 材质与 sheen 扩展；`patch_glb()`
+负责补齐法线/材质，并校验 NORMAL 与 POSITION 的顶点数一致（trimesh 的
+`ColorVisuals` 默认只写 `POSITION/COLOR_0`，缺 NORMAL 会被 three.js 退化成硬边）。
+
+实现要点 / 实测踩过的坑：
+- 必须用局部 polynomial smooth-min，不能用 log-sum-exp：后者外扩量约
+  `k·log(部件数)`，20 个部件会把整只动物肿成一坨、四条腿粘在一起。
+- `chain()` 的相邻球之间必须补胶囊：间距一旦大于两半径之和，尾巴会断成
+  一串浮空小球（第一版猫尾 / 龙尾的真实缺陷）。
+- 绒毛细锥的法线要继承所在表面法线；用几何侧面法线会在漫反射下把每根
+  绒毛画成一粒黑芝麻。
 
 ### 4.2 亲眼看一眼再交付
 
@@ -228,8 +239,19 @@ tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/render_glb.py \
 > 教训：只校验「文件头是 glTF、字节数正常」不等于模型能看。
 > 以前就是漏了这一步，把畸形网格当成品交付了。**改模型后务必渲染复验**。
 
+预览器现在直接读 GLB 的 `NORMAL` 顶点法线着色，与 App 的 three.js /
+model-viewer 一致；早期版本用面法线，会把绒毛误画成黑点，属于工具误报。
+
 id 必须与 `lib/core/avatar3d/route_c_glb_store.dart` 的 `routeCSamples` 对齐。
-服务端启动时会自动读取该目录（`/api/samples` 返回清单）。
+服务端每次请求都读该目录（`/api/samples` 返回清单），**替换 GLB 后无需重启服务**。
+
+### 4.3 样例版本与 App 缓存
+
+`build_samples.py` 的 `SAMPLE_REV` 与
+`lib/core/avatar3d/route_c_glb_store.dart` 的 `sampleRevision` **必须一致**。
+缓存文件名是 `<id>_v<rev>.glb`：换造型时两边同步 +1，新 APK 才不会读到
+上一代模型。App 样例区另有「刷新样例」按钮，逐个 `forceRefresh` 覆盖下载
+（下载失败时旧缓存仍在，离线演示不丢）。
 
 App 端逻辑在 `RouteCGlbStore.loadSample`：私有目录有缓存就直接读，
 没有才用当前配置的服务地址走 `GET /api/sample/{id}`。所以**第一次点样例需要
