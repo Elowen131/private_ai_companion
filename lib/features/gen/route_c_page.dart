@@ -312,14 +312,14 @@ class _RouteCPageState extends State<RouteCPage> {
         children: [
           const Row(
             children: [
-              const Icon(Icons.dns_outlined, size: 16),
-              const SizedBox(width: 6),
-              const Text(
+              Icon(Icons.dns_outlined, size: 16),
+              SizedBox(width: 6),
+              Text(
                 '本机服务地址',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
               ),
-              const Spacer(),
-              const Text(
+              Spacer(),
+              Text(
                 '默认 127.0.0.1:8765',
                 style: TextStyle(fontSize: 10.5, color: Colors.grey),
               ),
