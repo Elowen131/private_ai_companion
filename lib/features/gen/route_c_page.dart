@@ -17,7 +17,8 @@ import 'package:private_ai_companion/core/avatar3d/route_c_prompts.dart';
 ///
 /// 设备侧通过 `adb reverse tcp:8765 tcp:8765` 把 127.0.0.1:8765 指到 PC。
 ///
-/// 离线兜底：内置若干样例 GLB（assets/route_c_samples/），无服务、无网也能演示。
+/// 样例兜底：GLB 不随包分发（PRD 11.3），首次由本地服务 `/api/sample/<id>`
+/// 下发并缓存到应用私有目录，之后无服务、无网也能演示。
 ///
 /// 诚实边界（UI 必须如实展示，不粉饰）：
 /// - 模型是 Shap-E text300M，产出是**风格化、低面数**的 3D，不是照片级写实；
@@ -162,13 +163,14 @@ class _RouteCPageState extends State<RouteCPage> {
             '请确认：①PC 已运行 python tools/text_to_3d/server.py；'
             '②USB 连手机后执行 adb reverse tcp:8765 tcp:8765；'
             '③本页地址填的是 127.0.0.1:8765。\n'
-            '也可直接点下方「离线样例」预览内置模型。';
+            '若样例之前已缓存过，点下方「样例」仍可离线查看。';
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = '生成失败：$e\n可改用下方「离线样例」，或检查本地服务是否启动。';
+        _error = '生成失败：$e\n'
+            '可改用下方「样例」（首次需连服务下载），或检查本地服务是否启动。';
       });
     }
   }
@@ -187,11 +189,11 @@ class _RouteCPageState extends State<RouteCPage> {
       _srcLabel = null;
     });
     try {
-      final src = await store.loadSample(s);
+      final src = await store.loadSample(s, baseUrl: _baseUrl);
       if (!mounted) return;
       setState(() {
         _src = src;
-        _srcLabel = '离线样例 · ${s.name}（${s.hint}）';
+        _srcLabel = '样例 · ${s.name}（${s.hint}）';
         _busy = false;
         _status = null;
       });
@@ -199,7 +201,9 @@ class _RouteCPageState extends State<RouteCPage> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = '样例加载失败：$e\n（样例 GLB 可能尚未生成，见 tools/text_to_3d/generate.py）';
+        _error = '样例加载失败：$e\n'
+            '请先启动本地服务并确认地址正确；样例首次需从服务下载一次，'
+            '之后会缓存到应用私有目录、离线也能看。';
       });
     }
   }
@@ -420,14 +424,14 @@ class _RouteCPageState extends State<RouteCPage> {
               Icon(Icons.inventory_2_outlined, size: 16, color: cs.primary),
               const SizedBox(width: 6),
               const Text(
-                '离线样例（无需服务）',
+                '样例（首次需连服务下载）',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
               ),
             ],
           ),
           const SizedBox(height: 4),
           const Text(
-            '内置样例会拷到本机并直接渲染，适合先看效果或没有 PC 时演示。',
+            'GLB 不随包分发（PRD 11.3）。首次点样例由本地服务下发并缓存到本机，之后无服务、无网也能直接渲染。',
             style: TextStyle(fontSize: 10.5, color: Colors.grey),
           ),
           const SizedBox(height: 8),

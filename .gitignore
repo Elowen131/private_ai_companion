@@ -133,7 +133,6 @@ web/icons/Icon-*.png
 # 本地权重（2GB+）与并行下载的分块缓存绝不入库；仅保留目录说明文件。
 /tools/text_to_3d/weights/openai_shap-e/*
 !/tools/text_to_3d/weights/openai_shap-e/README.txt
-# 生成中间产物（正式样例提交在 assets/route_c_samples/）
-/tools/text_to_3d/samples/
+# 临时验证产物（tools/text_to_3d/samples/ 是服务端样例资源，需提交，不忽略）
 /tools/text_to_3d/verify.glb
 /test_cat.glb

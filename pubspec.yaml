@@ -76,6 +76,7 @@ flutter:
   assets:
     - assets/models/persona_visual_manifest.json
     - assets/models/cen_youheng_q_portrait.jpg
-    # 路线 C 离线样例：由 tools/text_to_3d/generate.py 用 Shap-E 离线生成，
-    # 随包分发，保证无 PC / 无网也能演示文生 3D（id 与 route_c_glb_store.dart 对齐）。
-    - assets/route_c_samples/
+    # 路线 C 样例 GLB 刻意不打包（PRD 11.3「模型按需下载不进包」，
+    # tools/check_apk_size.py 硬断言 assets/ 内不得出现 .glb）。
+    # 样例放在 tools/text_to_3d/samples/，由本地服务 /api/sample/<id> 按需下发，
+    # App 下载一次后缓存到应用私有目录，之后无需服务也能看。

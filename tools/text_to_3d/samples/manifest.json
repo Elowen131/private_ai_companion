@@ -1,0 +1,32 @@
+[
+  {
+    "id": "cat",
+    "prompt": "a cute cat",
+    "file": "cat.glb"
+  },
+  {
+    "id": "dog",
+    "prompt": "a small dog",
+    "file": "dog.glb"
+  },
+  {
+    "id": "dragon",
+    "prompt": "a dragon",
+    "file": "dragon.glb"
+  },
+  {
+    "id": "robot",
+    "prompt": "a robot",
+    "file": "robot.glb"
+  },
+  {
+    "id": "chair",
+    "prompt": "a wooden chair",
+    "file": "chair.glb"
+  },
+  {
+    "id": "flower",
+    "prompt": "a flower",
+    "file": "flower.glb"
+  }
+]

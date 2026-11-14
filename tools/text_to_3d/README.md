@@ -73,8 +73,8 @@ tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
 | --- | --- | --- |
 | POST | `/api/gen` | body `{"prompt","guidance_scale"(默认15.0),"num_inference_steps"(默认64),"frame_size"(默认256),"seed"}` → GLB 字节（`model/gltf-binary`）。提示词哈希缓存，重复提示词秒回。 |
 | GET | `/api/health` | 返回 `{"ok","gpu","device","model_loaded","cache"}` |
-| GET | `/api/samples` | 离线样例清单（若 `samples/manifest.json` 存在） |
-| GET | `/api/sample/<id>` | 离线样例 GLB |
+| GET | `/api/samples` | 样例清单（若 `samples/manifest.json` 存在） |
+| GET | `/api/sample/{id}` | 样例 GLB 字节（App 首次点样例时下载并缓存） |
 
 ### 2.5 权重走本地目录（网络受限 / 已下好权重的场景）
 
@@ -155,22 +155,35 @@ App 内：进入「文生 3D（本地 AI）」页面 → 输入提示词（中�
 
 - 设备侧 AndroidManifest 已全局允许 cleartext，且声明 `INTERNET`，故此本地 HTTP 可用。
 - 连不上服务时，页面会提示检查：①服务是否运行 ②地址/接线是否正确；
-  并可直接点「离线样例」预览内置模型。
+  若样例之前已缓存过本，点「样例」仍可离线查看。
 
 ---
 
-## 4. 离线样例（可选 · 无 PC / 无网也能演示）
+## 4. 样例（服务下发 + App 缓存，不进 APK）
 
-在一台能联网的电脑上生成样例 GLB，提交进 `assets/route_c_samples/` 随包分发：
+> ⚠️ **GLB 不能放进 `assets/`**。项目有硬约束 PRD 11.3「模型按需下载不进包」，
+> `tools/check_apk_size.py` 会硬断言 `assets/` 内不得出现 `.glb`
+> （且 flutter_assets 可控部分预算仅 1 MB），放进包里 CI 的
+> `Build Android` job 会直接 FAIL。
+
+样例 GLB 存放在 **`tools/text_to_3d/samples/`**（随仓库提交，但**不打进 APK**），
+由本地服务的 `/api/sample/{id}` 按需下发。App 首次点样例时下载一次并缓存到
+应用私有目录 `route_c/samples/`，**之后无服务、无网也能直接渲染**。
+
+生成（在装有本地权重的机器上，CPU 约 2~3 分钟/张）：
 
 ```bash
-tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/generate.py
+tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/generate.py \
+    --steps 16 --frame-size 64
 # 产物：tools/text_to_3d/samples/{cat,dog,dragon,robot,chair,flower}.glb + manifest.json
 ```
 
-把生成的 `samples/*.glb` 拷到 `assets/route_c_samples/`（与
-`lib/core/avatar3d/route_c_glb_store.dart` 里的 `routeCSamples` id 对齐），
-App 在「离线样例」里即可直接渲染，无需本地服务。
+id 必须与 `lib/core/avatar3d/route_c_glb_store.dart` 的 `routeCSamples` 对齐。
+服务端启动时会自动读取该目录（`/api/samples` 返回清单）。
+
+App 端逻辑在 `RouteCGlbStore.loadSample`：私有目录有缓存就直接读，
+没有才用当前配置的服务地址走 `GET /api/sample/{id}`。所以**第一次点样例需要
+本地服务在运行**；已缓存过则完全离线可用。
 
 ---
 
