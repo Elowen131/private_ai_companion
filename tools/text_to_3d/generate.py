@@ -74,7 +74,9 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[route_c] device = {device}", flush=True)
+    # CPU 上 fp16 算子不全，按 fp32 加载（fp16 权重自动上转）；GPU 才用 fp16。
+    dtype = torch.float16 if device.type == "cuda" else torch.float32
+    print(f"[route_c] device = {device}, dtype = {dtype}", flush=True)
 
     # 解析本地权重目录：--model-dir > 环境变量 LOCAL_MODEL_DIR >
     # 默认落点 tools/text_to_3d/weights/openai_shap-e
@@ -91,7 +93,7 @@ def main():
         print(f"[route_c] loading Shap-E from local dir: {model_dir} …", flush=True)
         pipe = ShapEPipeline.from_pretrained(
             model_dir,
-            torch_dtype=torch.float16,
+            torch_dtype=dtype,
             variant="fp16",
             use_safetensors=True,
             local_files_only=True,
@@ -100,7 +102,7 @@ def main():
         print("[route_c] loading Shap-E (openai/shap-e) …", flush=True)
         pipe = ShapEPipeline.from_pretrained(
             "openai/shap-e",
-            torch_dtype=torch.float16,
+            torch_dtype=dtype,
             variant="fp16",
             use_safetensors=True,
         ).to(device)

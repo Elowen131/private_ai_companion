@@ -90,6 +90,18 @@ tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
    ```
    产物是一个含 `model_index.json`、`prior/`、`renderer/`、`text_encoder/` 等的目录。
 
+   **弱网专用（推荐给被限速的机器）**：`fetch_weights.py` 用 16 连接并行分块 +
+   HTTP Range 下载。hf-mirror 的小文件 API 通道常被限速到 ~130 B/s，但 LFS 大文件
+   走 `cas-bridge.xethub.hf.co` CDN 不受限；并行可把有效带宽叠加到 ~800 KB/s，
+   且每个分块独立落盘，**中断后重跑自动跳过已完成块**（真·断点续传）：
+   ```bash
+   python tools/text_to_3d/fetch_weights.py \
+       --local-dir ./tools/text_to_3d/weights/openai_shap-e \
+       --workers 16 --chunk-size 4
+   ```
+   只用 Python 标准库，无额外依赖。它会自动把 `renderer` 的 fp16 权重复制一份给
+   `shap_e_renderer`（两者是同一 `ShapERenderer` 的副本），省下 863 MB 的 fp32 下载。
+
 2. 把整个 `openai_shap-e` 目录拷到本项目所在机器（U 盘 / 局域网 / 网盘均可）。
 
 3. 启动服务或生成样例时，用 `LOCAL_MODEL_DIR` 指向它即可离线加载：

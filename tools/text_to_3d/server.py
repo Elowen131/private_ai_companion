@@ -91,6 +91,10 @@ def ensure_models() -> dict:
         if "pipe" in _MODELS:
             return _MODELS
         _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # PyTorch CPU 对 fp16 算子支持不全（会报 not implemented for 'Half'），
+        # 故 CPU 上按 fp32 加载（fp16 权重会自动上转），GPU 上才用 fp16。
+        dtype = torch.float16 if _DEVICE.type == "cuda" else torch.float32
+        print(f"[route_c] dtype = {dtype}", flush=True)
         local_dir = _resolve_local_model_dir()
         if local_dir:
             # 本地权重目录：完全离线，local_files_only 强制不碰网络。
@@ -101,17 +105,17 @@ def ensure_models() -> dict:
             )
             pipe = ShapEPipeline.from_pretrained(
                 src,
-                torch_dtype=torch.float16,
+                torch_dtype=dtype,
                 variant="fp16",
                 use_safetensors=True,
                 local_files_only=True,
             )
         else:
             print(f"[route_c] loading Shap-E (openai/shap-e) on {_DEVICE} …", flush=True)
-            # 始终用 fp16 变体，下载体积约为 fp32 的一半；CPU 也能跑（更慢）。
+            # 始终用 fp16 变体（下载体积约为 fp32 的一半）；dtype 按设备自适应。
             pipe = ShapEPipeline.from_pretrained(
                 "openai/shap-e",
-                torch_dtype=torch.float16,
+                torch_dtype=dtype,
                 variant="fp16",
                 use_safetensors=True,
             )
