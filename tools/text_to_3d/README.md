@@ -9,33 +9,41 @@
 
 ---
 
-## 1. 准备 Python 环境（一次性）
+## 1. 准备 Python 环境（一次性 · 一键）
 
-需要 Python 3.12。建议在仓库里建一个独立 venv：
+> ⚠️ 文件夹名是 **`text_to_3d`**（下划线），不是 `text-to-3d`。
+> 本脚本来自我定位（`$PSScriptRoot`），**不需要先 cd 到项目根目录**。
 
-```bash
-# 用你本机的 python3.12 建 venv
-python -m venv tools/text_to_3d/.venv
-# Windows 激活：
-tools/text_to_3d/.venv/Scripts/activate
-# 或直接使用解释器：
-#   tools/text_to_3d/.venv/Scripts/pip.exe
-#   tools/text_to_3d/.venv/Scripts/python.exe
+需要 Python 3.12（装了就勾选 "Add to PATH"）。在 PowerShell 里运行：
+
+```powershell
+# 方式一：右键该文件「用 PowerShell 运行」
+# 方式二：显式绕过执行策略
+powershell -ExecutionPolicy Bypass -File tools/text_to_3d/setup.ps1
 ```
 
-安装依赖。torch 体积大，建议先用本地 wheel（若 `tools/text_to_3d/wheels/` 下已有
-`torch-*-cpu-*.whl`，从它装可省去代理下载；没有就让 pip 从 pypi 拉）：
+脚本会自动：建 venv → 装 torch（优先用 `wheels/` 下匹配版本的本地 wheel，离线秒装；
+否则从 PyTorch **CPU** 源拉，避免默认装 2.6GB 的 CUDA 版）→ 装 diffusers/transformers/
+accelerate/trimesh（高超时 + 重试，抗弱网）。
 
-```bash
-# 若本地有 wheel：
-pip install tools/text_to_3d/wheels/torch-*-cpu-*.whl
-# 其余依赖：
-pip install diffusers transformers accelerate trimesh
+想**提前把 Shap-E 权重（约 1~1.5 GB，来自 hf-mirror）下载好**（可断点续传），加开关：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/text_to_3d/setup.ps1 -DownloadWeights
 ```
 
 > 国内网络：权重与 PyPI 都走系统代理即可；本工具已默认把 `HF_ENDPOINT`
 > 设为 `https://hf-mirror.com`，首次拉取 `openai/shap-e` 权重走镜像。
 > 本机回环（127.0.0.1）不走代理。
+
+> 若不想用脚本，也可手动（但务必注意上面两处坑：路径下划线、PowerShell 不展开 `*`）：
+> ```powershell
+> python -m venv tools/text_to_3d/.venv
+> tools/text_to_3d/.venv/Scripts/pip install --default-timeout 600 --retries 20 `
+>     (Get-ChildItem tools/text_to_3d/wheels -Filter 'torch-*-cp312-*.whl' | Select -First 1).FullName
+> tools/text_to_3d/.venv/Scripts/pip install --default-timeout 600 --retries 20 `
+>     diffusers transformers accelerate trimesh
+> ```
 
 ---
 
@@ -43,11 +51,12 @@ pip install diffusers transformers accelerate trimesh
 
 ```bash
 tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
-# 可选参数：--host 127.0.0.1 --port 8765 --steps 64 --frame-size 256
+# 可选参数：--host 0.0.0.0 --port 8765 --steps 64 --frame-size 256
 ```
 
+- 默认监听 `0.0.0.0:8765`（同 Wi-Fi 下手机可直接用**电脑局域网 IP** 访问，无需 adb）。
 - 首次运行会下载 Shap-E 权重（fp16，约 1~1.5 GB，来自 hf-mirror）。**只需一次**，之后离线可用。
-- 启动后监听 `http://127.0.0.1:8765`。
+- 启动后控制台会打印手机可访问的地址示例。
 - 健康检查：`GET http://127.0.0.1:8765/api/health`
 
 ### 接口
@@ -61,20 +70,29 @@ tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
 
 ---
 
-## 3. App 端接线（手机 ↔ 电脑）
+## 3. App 端接线（手机 ↔ 电脑）— 两种办法
 
-手机通过 `adb reverse` 把本机回环端口指到运行服务的电脑：
+### 办法 A：同 Wi-Fi 直连（推荐，免装 adb）
+1. 电脑和手机连**同一个 Wi-Fi**。
+2. 服务以默认 `--host 0.0.0.0` 启动（或显式加上）。
+3. 电脑上查局域网 IP：`ipconfig` → 看「IPv4 地址」（如 `192.168.1.23`）。
+4. App 内「文生 3D（本地 AI）」页面，地址填 `http://192.168.1.23:8765` → 生成。
 
+### 办法 B：USB + adb reverse
 ```bash
-# USB 连上手机后执行（端口需与 App 内填写的一致，默认 8765）：
+# 先安装 Android 调试桥（platform-tools）：
+#   下载 https://developer.android.com/tools/releases/platform-tools 并解压，
+#   把解压目录加入系统 PATH，或在该目录下打开终端。
+# USB 连上手机并开启「USB 调试」后执行（端口需与 App 内填写一致，默认 8765）：
 adb reverse tcp:8765 tcp:8765
 ```
+此时手机 `127.0.0.1:8765` 会被映射到电脑，App 内地址填 `http://127.0.0.1:8765` 即可。
 
 App 内：进入「文生 3D（本地 AI）」页面 → 输入提示词（中文自动翻译为英文）
 → 点「生成 3D 模型」→ 产物落盘到应用私有目录并以 `file://` 渲染。
 
 - 设备侧 AndroidManifest 已全局允许 cleartext，且声明 `INTERNET`，故此本地 HTTP 可用。
-- 连不上服务时，页面会提示检查：①服务是否运行 ②`adb reverse` 是否执行 ③地址是否填对；
+- 连不上服务时，页面会提示检查：①服务是否运行 ②地址/接线是否正确；
   并可直接点「离线样例」预览内置模型。
 
 ---
@@ -98,7 +116,8 @@ App 在「离线样例」里即可直接渲染，无需本地服务。
 
 - 模型是 **Shap-E（stylized / 低面数）**，产出是风格化 3D，**不是照片级写实**。
 - 中文经本地词表翻译（确定性替换，不是语义翻译）；复杂句式请直接用英文提示词。
-- 实时生成依赖**本机 PC 服务 + adb reverse**；手机本身不跑模型。
+- 实时生成依赖**本机 PC 服务**；手机通过「同 Wi-Fi 直连（--host 0.0.0.0）」或
+  「USB + adb reverse」两种方式之一连到该服务，手机本身不跑模型。
 - 首次权重下载约 1~1.5 GB（一次性）；CPU 推理单张可能数十秒到数分钟，GPU 快很多。
 
 ---

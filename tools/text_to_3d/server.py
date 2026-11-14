@@ -271,19 +271,45 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, data, content_type="model/gltf-binary")
 
 
+def _lan_ip() -> str:
+    """尽力拿到一个非空局域网 IPv4，用于打印手机访问地址示例。"""
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return ""
+
+
 def main():
     ap = argparse.ArgumentParser(description="本地文生 3D 服务（Shap-E / diffusers）")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="0.0.0.0",
+                   help="默认 0.0.0.0（同 Wi-Fi 下手机可直接用电脑局域网IP访问）。"
+                        "若只用 USB+adb reverse，可改用 127.0.0.1。")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--steps", type=int, default=64)
     ap.add_argument("--frame-size", type=int, default=256)
     args = ap.parse_args()
 
+    lan_ip = _lan_ip()
     print(
         f"[route_c] serving on http://{args.host}:{args.port} "
         f"(GPU={torch.cuda.is_available()})",
         flush=True,
     )
+    if args.host in ("0.0.0.0", ""):
+        print(
+            f"[route_c] 手机（同 Wi-Fi）访问地址示例：http://{lan_ip or '<电脑局域网IP>'}:{args.port}",
+            flush=True,
+        )
+        print(
+            "[route_c] 若改用 USB+adb：先 `adb reverse tcp:8765 tcp:8765`，"
+            "并以 --host 127.0.0.1 启动。",
+            flush=True,
+        )
     print(
         "[route_c] 首次运行会下载 Shap-E 权重（fp16 变体，来自 hf-mirror.com），"
         "之后离线可用。",
