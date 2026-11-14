@@ -266,6 +266,39 @@ class SDFShape:
             lo, hi = np.minimum(lo, a), np.maximum(hi, b)
         return lo - pad, hi + pad
 
+    def surface_hit(self, x: float, y: float, steps: int = 260):
+        """沿 -Z 射线求 (x,y) 处**融合后**身体的最外层表面点与单位外法线。
+
+        五官不能用「按椭球公式手算 z」定位：poly smooth-min 会让曲面外扩，
+        而且脸前往往还叠着口吻/胸腹等部件。以前眼白球心正好落在估算表面
+        上，导致整颗眼球连虹膜瞳孔一起凸在脸外。现在一律问真实 SDF。
+        """
+        z_top = float(self.bounds(pad=0.6)[1][2])
+        z_bottom = float(self.bounds(pad=0.6)[0][2])
+        zs = np.linspace(z_top, z_bottom, steps)
+        pts = np.column_stack([np.full(steps, x, np.float64),
+                               np.full(steps, y, np.float64), zs])
+        d, _ = self.eval_field(pts)
+        idx = np.where((d[:-1] > 0) & (d[1:] <= 0))[0]
+        if not len(idx):
+            return None
+        i = int(idx[0])
+        t = float(d[i] / max(d[i] - d[i + 1], 1e-9))
+        z = float(zs[i] + t * (zs[i + 1] - zs[i]))
+        P = np.array([x, y, z], np.float64)
+
+        eps = 0.012
+        def ev(q):
+            return float(self.eval_field(np.asarray(q, np.float64)[None, :])[0][0])
+        g = np.array([
+            (ev(P + [eps, 0, 0]) - ev(P - [eps, 0, 0])) / (2 * eps),
+            (ev(P + [0, eps, 0]) - ev(P - [0, eps, 0])) / (2 * eps),
+            (ev(P + [0, 0, eps]) - ev(P - [0, 0, eps])) / (2 * eps),
+        ])
+        ln = float(np.linalg.norm(g))
+        N = g / ln if ln > 1e-9 else np.array([0.0, 0.0, 1.0])
+        return P, N
+
     # ------------------------------------------------------------ 等值面
     def build(self, res: int = 72, fur_count: int = 7000, seed: int = 7,
               fur_length: float = 0.032, fur_radius: float = 0.0085,

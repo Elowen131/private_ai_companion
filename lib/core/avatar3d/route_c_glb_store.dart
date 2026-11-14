@@ -21,7 +21,7 @@ class RouteCGlbStore {
   /// 样例资产版本。服务端 tools/text_to_3d/build_samples.py 的 SAMPLE_REV
   /// 必须与这里一致。每次换样例造型就 +1：缓存文件名带 rev，新 APK 不会
   /// 再读到上一代模型（旧版曾出现「服务端换了、手机还显示老狗」）。
-  static const int sampleRevision = 2;
+  static const int sampleRevision = 3;
 
   final String baseDir;
   RouteCGlbStore(this.baseDir);

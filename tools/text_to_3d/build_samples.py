@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(HERE, "samples")
 
 # 样例版本：App 端缓存文件名带此 rev，服务端换了模型后新 APK 不会读到旧缓存
-SAMPLE_REV = 2
+SAMPLE_REV = 3
 
 # ------------------------------------------------------------------ 通用五官
 BLACK = "#2B221E"
@@ -38,28 +38,87 @@ EYE_WHITE = "#FCF8F0"
 GLINT = "#FFFFFF"
 
 
-def _eyes(s, *, x, y, z, white_r, pupil_r, iris_color,
-          pupil_color=BLACK, glint=True, exclude=0.135):
-    """一对「眼白 + 有色虹膜 + 瞳孔 + 高光」的高精度眼球。
+def _align_z(n):
+    """把局部 +Z 轴转到表面法线 n 的 4x4 旋转（眼片要顺着脸的曲率贴）。"""
+    z = np.array([0.0, 0.0, 1.0])
+    c = float(np.clip(np.dot(z, n), -1.0, 1.0))
+    v = np.cross(z, n)
+    lv = float(np.linalg.norm(v))
+    if lv < 1e-8:
+        return rotation_matrix(0.0, [0, 1, 0]) if c > 0 \
+            else rotation_matrix(np.pi, [1, 0, 0])
+    return rotation_matrix(float(np.arccos(c)), v / lv)
 
-    全部作为 extras 叠加，不走 SDF 网格 —— 网格格子约 0.04，瞳孔/高光
-    比格子还小，交给等值面提取会被直接抹平。
+
+def _embedded_nose(s, *, x, y, radii, color, embed=0.70, exclude=0.10):
+    """鼻头同样按真实曲面向里嵌，别让侧面轮廓鼓出一个黑球。"""
+    hit = s.surface_hit(x, y)
+    if hit is None:
+        return
+    P, N = hit
+    R = _align_z(N)
+    s.ellipsoid_extra(P - N * (radii[2] * embed), radii, color,
+                      rot=R, exclude_radius=exclude)
+
+
+def _eyes(s, *, x, y, white_r, pupil_r, iris_color,
+          pupil_color=BLACK, glint=True, socket_color=None,
+          embed=0.62, exclude=0.145):
+    """**嵌入式**卡通眼：沿融合曲面的真实表面贴一枚光滑圆眼片。
+
+    旧版把「眼白球 + 虹膜球 + 瞳孔球 + 高光球」沿 +Z 一层层往外叠，
+    球心还按椭球公式手算、正好落在脸表面上，结果 3/4 视角里就是两颗
+    越来越小的球挂在脸外 —— 用户一眼看出的「眼珠子在外面」。
+
+    现在：
+    - 用 surface_hit(x, y) 问真实 SDF，拿到表面点 P 与外法线 N；
+    - 眼白球心沿 N 往里埋 embed*rz，只露一个浅圆冠，且整枚眼片按 N 旋转，
+      在脸侧也顺着曲率而不是一律朝正前方；
+    - 虹膜 / 瞳孔 / 高光改成**薄圆片**，贴着眼白冠面，不再叠成球链；
+    - 可选一圈淡色眼窝暗边，强化「嵌进毛里」的观感。
     """
     for sgn in (-1, 1):
-        cx = sgn * x
-        s.ellipsoid_extra((cx, y, z), white_r, EYE_WHITE, exclude_radius=exclude)
-        s.ellipsoid_extra((cx * 1.02, y - 0.005, z + white_r[2] * 0.72),
-                          pupil_r, iris_color, exclude_radius=exclude * 0.9)
-        if pupil_color != iris_color:
-            s.ellipsoid_extra((cx * 1.02, y - 0.008, z + white_r[2] * 0.72 + pupil_r[2] * 0.65),
-                              (pupil_r[0] * 0.42, pupil_r[1] * 0.86, pupil_r[2] * 0.55),
-                              pupil_color)
-        if glint:
+        hit = s.surface_hit(sgn * x, y)
+        if hit is None:  # 理论上不会发生；保底不让整个模型崩掉
+            continue
+        P, N = hit
+        # 眼片朝向比表面法线更偏正前方：玩偶眼睛是朝前贴的扁片，严格沿
+        # 法线倾斜会让远侧那只眼在 3/4 视角侧贴到头部轮廓上、露出一条白边。
+        Ne = 0.55 * N + 0.45 * np.array([0.0, 0.0, 1.0])
+        Ne /= float(np.linalg.norm(Ne))
+        R = _align_z(Ne)
+        rz = float(white_r[2])
+        crown = rz * (1.0 - embed)         # 眼白露出脸表面的高度
+
+        if socket_color:
+            # 略大、埋得更深，只露出一圈窄边当作眼眶
             s.ellipsoid_extra(
-                (cx * 1.02 - 0.026, y + pupil_r[1] * 0.42,
-                 z + white_r[2] * 0.72 + pupil_r[2] * 0.82),
-                (0.026, 0.028, 0.016), GLINT, subdivisions=2,
-            )
+                P - N * (rz * 0.84),
+                (white_r[0] * 1.15, white_r[1] * 1.15, rz),
+                socket_color, rot=R, exclude_radius=exclude * 1.15)
+
+        C = P - N * (rz * embed)          # 眼白球心：大部分埋在脸里
+        s.ellipsoid_extra(C, white_r, EYE_WHITE, rot=R,
+                          exclude_radius=exclude)
+
+        # 虹膜 / 瞳孔 / 高光的位移全部**相对表面 P**，而不是相对眼白球心：
+        # 否则调 embed 时这几层会跟着往里陷或往外鼓，又变回一串球。
+        I = P + N * (crown * 0.82)
+        s.ellipsoid_extra(I, (pupil_r[0], pupil_r[1], 0.006),
+                          iris_color, rot=R)
+        if pupil_color != iris_color:
+            s.ellipsoid_extra(I + N * 0.004,
+                              (pupil_r[0] * 0.44, pupil_r[1] * 0.86, 0.004),
+                              pupil_color, rot=R)
+        if glint:
+            side = np.cross(N, np.array([0.0, 1.0, 0.0]))
+            sl = float(np.linalg.norm(side))
+            side = side / sl if sl > 1e-6 else np.array([1.0, 0.0, 0.0])
+            up = np.cross(side, N)
+            G = (I + N * 0.005
+                 - side * (pupil_r[0] * 0.34) + up * (pupil_r[1] * 0.36))
+            s.ellipsoid_extra(G, (0.020, 0.022, 0.003), GLINT,
+                              subdivisions=2, rot=R)
 
 
 # ------------------------------------------------------------------ 小狗
@@ -88,11 +147,11 @@ def make_dog() -> SDFShape:
     s.chain([(0, 0.30, -0.74), (0, 0.48, -0.92), (0, 0.68, -0.98),
              (0, 0.84, -0.88)], [0.140, 0.132, 0.112, 0.078], EAR)
 
-    s.ellipsoid_extra((0, 0.565, 1.075), (0.105, 0.085, 0.075), BLACK,
-                      exclude_radius=0.125)                        # 鼻头
-    _eyes(s, x=0.205, y=0.775, z=0.895,
-          white_r=(0.098, 0.108, 0.058), pupil_r=(0.066, 0.082, 0.048),
-          iris_color="#4A3025")
+    _embedded_nose(s, x=0, y=0.565, radii=(0.105, 0.085, 0.075),
+                   color=BLACK, exclude=0.125)                     # 鼻头
+    _eyes(s, x=0.170, y=0.775,
+          white_r=(0.098, 0.108, 0.034), pupil_r=(0.066, 0.082, 0.048),
+          iris_color="#4A3025", socket_color="#D6A160")
     return s
 
 
@@ -123,16 +182,20 @@ def make_cat() -> SDFShape:
     s.chain([(0, 0.24, -0.70), (0, 0.48, -0.92), (0.06, 0.76, -0.94),
              (0.12, 0.98, -0.86)], [0.118, 0.114, 0.100, 0.078], DARK)
 
-    s.ellipsoid_extra((0, 0.585, 1.015), (0.065, 0.050, 0.048), "#E28E95",
-                      exclude_radius=0.10)
-    _eyes(s, x=0.205, y=0.795, z=0.875,
-          white_r=(0.112, 0.122, 0.058), pupil_r=(0.078, 0.098, 0.048),
-          iris_color="#C9913F", pupil_color="#2C231D", exclude=0.145)
-    # 胡须：细长椭球，向两侧略张
+    _embedded_nose(s, x=0, y=0.585, radii=(0.065, 0.050, 0.048),
+                   color="#E28E95", exclude=0.10)
+    _eyes(s, x=0.175, y=0.795,
+          white_r=(0.112, 0.122, 0.034), pupil_r=(0.078, 0.098, 0.048),
+          iris_color="#C9913F", pupil_color="#2C231D", exclude=0.145,
+          socket_color="#DB9655")
+    # 胡须：贴着脸颊真实曲面走，别像几根白针浮在空中
     for sgn in (-1, 1):
         for dy, ang in ((-0.02, 0.12), (0.045, -0.10)):
-            s.ellipsoid_extra((sgn * 0.30, 0.545 + dy, 0.99),
-                              (0.20, 0.007, 0.007), WHITE, subdivisions=2,
+            hy = 0.545 + dy
+            hit = s.surface_hit(sgn * 0.30, hy)
+            hz = (hit[0][2] + 0.008) if hit else 0.86
+            s.ellipsoid_extra((sgn * 0.30, hy, hz),
+                              (0.18, 0.007, 0.007), WHITE, subdivisions=2,
                               rot=rotation_matrix(sgn * ang, [0, 1, 0]))
     return s
 
@@ -172,12 +235,14 @@ def make_dragon() -> SDFShape:
     s.chain([(0, 0.18, -0.70), (0, 0.22, -0.98), (0.08, 0.30, -1.24),
              (0.18, 0.40, -1.44)], [0.145, 0.120, 0.092, 0.055], DEEP)
 
-    _eyes(s, x=0.205, y=0.925, z=0.905,
-          white_r=(0.100, 0.108, 0.056), pupil_r=(0.064, 0.080, 0.046),
-          iris_color="#3E6B48", pupil_color=BLACK, exclude=0.13)
+    _eyes(s, x=0.170, y=0.925,
+          white_r=(0.100, 0.108, 0.034), pupil_r=(0.064, 0.080, 0.046),
+          iris_color="#3E6B48", pupil_color=BLACK, exclude=0.13,
+          socket_color="#79B488")
     for sgn in (-1, 1):
-        s.ellipsoid_extra((sgn * 0.115, 0.79, 1.115),
-                          (0.030, 0.026, 0.020), "#4C7A55", subdivisions=2)
+        _embedded_nose(s, x=sgn * 0.115, y=0.79,
+                       radii=(0.030, 0.026, 0.020), color="#4C7A55",
+                       embed=0.55, exclude=0.05)
     return s
 
 
