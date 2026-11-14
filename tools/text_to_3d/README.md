@@ -14,11 +14,19 @@
 > ⚠️ 文件夹名是 **`text_to_3d`**（下划线），不是 `text-to-3d`。
 > 本脚本来自我定位（`$PSScriptRoot`），**不需要先 cd 到项目根目录**。
 
-需要 Python 3.12（装了就勾选 "Add to PATH"）。在 PowerShell 里运行：
+需要 Python 3.12（装了就勾选 "Add to PATH"）。**最稳妥**的做法（不用管当前在哪个目录）：
+
+> **方式零（推荐 · 双击即可）**：在资源管理器里进入项目根目录，双击
+> `setup_text_to_3d.ps1`（根目录那个），或在它上面右键「用 PowerShell 运行」。
+> 它会自动找到 `tools/text_to_3d/setup.ps1`，运行完窗口会暂停方便你看结果。
+
+如果想用命令行：
 
 ```powershell
+# 先进入项目根目录（含 tools/ 的那一层，例如 private_ai_companion）
+cd C:\Users\你的用户名\private_ai_companion
 # 方式一：右键该文件「用 PowerShell 运行」
-# 方式二：显式绕过执行策略
+# 方式二：显式绕过执行策略（注意路径要和「当前目录」对得上）
 powershell -ExecutionPolicy Bypass -File tools/text_to_3d/setup.ps1
 ```
 
@@ -127,3 +135,34 @@ App 在「离线样例」里即可直接渲染，无需本地服务。
 - 不使用任何付费 API / 云算力 / 付费模型资产。
 - 权重来自开源 `openai/shap-e`（MIT），经 hf-mirror 免费镜像拉取一次。
 - 推理完全离线，无后续费用。
+
+---
+
+## 7. 常见报错速查（对照截图）
+
+### 7.1 `can't open file '...tools\text_to_3d\server.py': No such file`
+### 7.2 `-File 形式参数的实际参数“tools\text_to_3d\setup.ps1”不存在`
+**根因：你在错误的目录里敲命令。** 这两个报错都出现在 `PS C:\Users\xxx>`
+（用户主目录）下，而项目在 `private_ai_companion\` 子目录里。相对路径
+`tools\text_to_3d\...` 实际指向了 `C:\Users\xxx\tools\text_to_3d\`（那里通常只有
+一个误建的空 venv，没有源码）。
+
+**解决（三选一，推荐第一种）：**
+1. 直接用根目录的 `setup_text_to_3d.ps1`（双击 / 右键运行），不依赖命令行目录；
+2. 先 `cd` 进项目根目录再跑：`cd C:\Users\你的用户名\private_ai_companion`；
+3. 用绝对路径：`powershell -ExecutionPolicy Bypass -File C:\Users\你的用户名\private_ai_companion\tools\text_to_3d\setup.ps1`。
+
+> 不确定项目在哪？在 PowerShell 里搜一下：
+> `Get-ChildItem -Path C:\ -Filter server.py -Recurse -ErrorAction SilentlyContinue`
+> 找到后 `cd` 到它所在目录（即 `.../tools/text_to_3d`）的**上一层**。
+
+### 7.3 `Read timed out` / pip 从 `files.pythonhosted.org` 超时
+弱网 / 代理下 PyPI 拉取超时。`setup.ps1` 已内置 `--default-timeout 600 --retries 20`，
+并会在默认源失败时**自动回退到清华镜像**。若仍失败：
+- 重试脚本（断点续传，已下部分不重下）；
+- 或先把 torch 的本地 wheel 放进 `tools/text_to_3d/wheels/`（见脚本注释），彻底离线安装。
+
+### 7.4 `adb : 无法将“adb”识别为…`
+**不必装 adb。** 直接用「同 Wi-Fi 直连」方案（见第 3 节办法 A）：服务默认就监听
+`0.0.0.0`，手机和电脑连同一 Wi-Fi，App 里填 `http://电脑局域网IP:8765` 即可。
+只有想用「USB + adb reverse」时才需要装 platform-tools 并加 PATH。

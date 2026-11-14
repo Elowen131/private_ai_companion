@@ -26,7 +26,31 @@ function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    ! $msg" -ForegroundColor Yellow }
 
+# 安装依赖：默认 PyPI 失败（弱网/超时）时自动回退到清华镜像，提升国内成功率。
+function Install-Pkgs($pkgs) {
+    $sources = @("", "https://pypi.tuna.tsinghua.edu.cn/simple")
+    foreach ($src in $sources) {
+        $a = @("--default-timeout","600","--retries","20")
+        $label = "默认 PyPI"
+        if ($src) { $a += @("-i",$src); $label = $src }
+        Write-Host "    - 通过 $label 安装..." -ForegroundColor Gray
+        & $Pip @a
+        if ($LASTEXITCODE -eq 0) { return }
+        Write-Warn "该源安装失败，尝试下一个源..."
+    }
+}
+
 # ---------------------------------------------------------------------------
+# 自检：本脚本必须与 server.py 同目录（即 tools/text_to_3d/）
+$serverPy = Join-Path $Root "server.py"
+Write-Host "脚本位置 : $Root" -ForegroundColor White
+Write-Host "目标 venv : $Venv" -ForegroundColor White
+if (-not (Test-Path $serverPy)) {
+    Write-Warn "同目录未找到 server.py —— 你很可能运行了错误位置的副本。"
+    Write-Warn "请回到项目根目录（含 tools/ 的那一层）再运行，或直接右键本文件『用 PowerShell 运行』。"
+    exit 1
+}
+
 Write-Step "1) 创建虚拟环境"
 if (Test-Path $Py) {
     Write-Ok "venv 已存在：$Venv"
@@ -59,7 +83,7 @@ else {
 
 # ---------------------------------------------------------------------------
 Write-Step "3) 安装其余依赖（diffusers / transformers / accelerate / trimesh）"
-& $Pip install --default-timeout 600 --retries 20 diffusers transformers accelerate trimesh
+Install-Pkgs @("diffusers","transformers","accelerate","trimesh")
 if ($LASTEXITCODE -ne 0) {
     Write-Warn "依赖安装失败（多为网络超时）。可重试本脚本，或手动："
     Write-Warn "  $Pip install --default-timeout 600 --retries 20 diffusers transformers accelerate trimesh"
@@ -77,7 +101,6 @@ if ($DownloadWeights) {
 }
 
 # ---------------------------------------------------------------------------
-$serverPy = Join-Path $Root "server.py"
 Write-Step "完成 ✅ 下一步"
 Write-Host "  启动服务：" -ForegroundColor White
 Write-Host "    $Py $serverPy" -ForegroundColor Gray
