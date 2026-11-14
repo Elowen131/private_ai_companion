@@ -362,11 +362,19 @@ def main():
             "并以 --host 127.0.0.1 启动。",
             flush=True,
         )
-    print(
-        "[route_c] 首次运行会下载 Shap-E 权重（fp16 变体，来自 hf-mirror.com），"
-        "之后离线可用。",
-        flush=True,
-    )
+    local_dir = _resolve_local_model_dir()
+    if local_dir:
+        print(
+            f"[route_c] 检测到本地权重目录：{local_dir}\n"
+            "[route_c] 将完全离线加载（不联网、不下载）。",
+            flush=True,
+        )
+    else:
+        print(
+            "[route_c] 未检测到本地权重；首次运行会联网下载 Shap-E 权重"
+            "（fp16 变体，来自 hf-mirror.com），之后离线可用。",
+            flush=True,
+        )
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         httpd.serve_forever()
