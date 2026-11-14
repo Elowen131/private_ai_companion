@@ -53,6 +53,24 @@ import numpy as np  # noqa: E402
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SAMPLES_DIR = os.path.join(_HERE, "samples")
 
+# 可选：权重本地目录（HF 格式，含 model_index.json 等）。设置后优先从本地加载，
+# 完全离线、不走网络。用于「在能联网的机器下好权重后拷过来」的场景。
+# 优先级：环境变量 LOCAL_MODEL_DIR > 默认落点 tools/text_to_3d/weights/openai_shap-e
+# 用法：LOCAL_MODEL_DIR=/path/to/openai_shap-e python server.py
+_LOCAL_MODEL_DIR = os.environ.get("LOCAL_MODEL_DIR", "").strip()
+
+
+def _resolve_local_model_dir() -> str | None:
+    """返回可用的本地权重目录；都不存在则返回 None（走默认联网拉取）。"""
+    candidates = [
+        _LOCAL_MODEL_DIR,
+        os.path.join(_HERE, "weights", "openai_shap-e"),
+    ]
+    for d in candidates:
+        if d and os.path.isdir(d) and os.path.exists(os.path.join(d, "model_index.json")):
+            return d
+    return None
+
 # 全局模型句柄（惰性加载）。
 _MODELS: dict = {}
 _MODELS_LOCK = threading.Lock()
@@ -73,14 +91,30 @@ def ensure_models() -> dict:
         if "pipe" in _MODELS:
             return _MODELS
         _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"[route_c] loading Shap-E (openai/shap-e) on {_DEVICE} …", flush=True)
-        # 始终用 fp16 变体，下载体积约为 fp32 的一半；CPU 也能跑（更慢）。
-        pipe = ShapEPipeline.from_pretrained(
-            "openai/shap-e",
-            torch_dtype=torch.float16,
-            variant="fp16",
-            use_safetensors=True,
-        )
+        local_dir = _resolve_local_model_dir()
+        if local_dir:
+            # 本地权重目录：完全离线，local_files_only 强制不碰网络。
+            src = local_dir
+            print(
+                f"[route_c] loading Shap-E from local dir: {src} on {_DEVICE} …",
+                flush=True,
+            )
+            pipe = ShapEPipeline.from_pretrained(
+                src,
+                torch_dtype=torch.float16,
+                variant="fp16",
+                use_safetensors=True,
+                local_files_only=True,
+            )
+        else:
+            print(f"[route_c] loading Shap-E (openai/shap-e) on {_DEVICE} …", flush=True)
+            # 始终用 fp16 变体，下载体积约为 fp32 的一半；CPU 也能跑（更慢）。
+            pipe = ShapEPipeline.from_pretrained(
+                "openai/shap-e",
+                torch_dtype=torch.float16,
+                variant="fp16",
+                use_safetensors=True,
+            )
         pipe = pipe.to(_DEVICE)
         _MODELS["pipe"] = pipe
         _MODELS["device"] = _DEVICE

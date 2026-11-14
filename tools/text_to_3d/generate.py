@@ -65,19 +65,45 @@ def main():
     ap.add_argument("--steps", type=int, default=64)
     ap.add_argument("--guidance", type=float, default=15.0)
     ap.add_argument("--frame-size", type=int, default=256)
+    ap.add_argument(
+        "--model-dir",
+        default=os.environ.get("LOCAL_MODEL_DIR", "").strip(),
+        help="本地权重目录（HF 格式）。设置后完全离线加载，不走网络。",
+    )
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[route_c] device = {device}", flush=True)
 
-    print("[route_c] loading Shap-E (openai/shap-e) …", flush=True)
-    pipe = ShapEPipeline.from_pretrained(
-        "openai/shap-e",
-        torch_dtype=torch.float16,
-        variant="fp16",
-        use_safetensors=True,
-    ).to(device)
+    # 解析本地权重目录：--model-dir > 环境变量 LOCAL_MODEL_DIR >
+    # 默认落点 tools/text_to_3d/weights/openai_shap-e
+    model_dir = args.model_dir
+    if not (model_dir and os.path.isdir(model_dir)
+            and os.path.exists(os.path.join(model_dir, "model_index.json"))):
+        default_dir = os.path.join(_HERE, "weights", "openai_shap-e")
+        if os.path.isdir(default_dir) and os.path.exists(
+            os.path.join(default_dir, "model_index.json")
+        ):
+            model_dir = default_dir
+
+    if model_dir:
+        print(f"[route_c] loading Shap-E from local dir: {model_dir} …", flush=True)
+        pipe = ShapEPipeline.from_pretrained(
+            model_dir,
+            torch_dtype=torch.float16,
+            variant="fp16",
+            use_safetensors=True,
+            local_files_only=True,
+        ).to(device)
+    else:
+        print("[route_c] loading Shap-E (openai/shap-e) …", flush=True)
+        pipe = ShapEPipeline.from_pretrained(
+            "openai/shap-e",
+            torch_dtype=torch.float16,
+            variant="fp16",
+            use_safetensors=True,
+        ).to(device)
     print("[route_c] pipeline ready.", flush=True)
 
     manifest = []

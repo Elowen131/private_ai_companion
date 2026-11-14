@@ -76,6 +76,42 @@ tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
 | GET | `/api/samples` | 离线样例清单（若 `samples/manifest.json` 存在） |
 | GET | `/api/sample/<id>` | 离线样例 GLB |
 
+### 2.5 权重走本地目录（网络受限 / 已下好权重的场景）
+
+如果本机访问 `huggingface.co` / `hf-mirror.com` 失败或极慢（例如被网络策略封锁、
+代理限速），可以让 `server.py` / `generate.py` **完全离线**从你本地已下载好的权重目录
+加载，不碰网络——把「下载」和「推理」解耦。
+
+1. 在「能联网的机器」（例如你开了 VPN、能打开 huggingface.co 的电脑）下载权重：
+   ```bash
+   pip install -U "huggingface_hub[cli]"
+   # 断点续传；默认走 hf-mirror，直连 huggingface.co 通可加 --endpoint https://huggingface.co
+   python tools/text_to_3d/download_weights.py --local-dir ./openai_shap-e
+   ```
+   产物是一个含 `model_index.json`、`prior/`、`renderer/`、`text_encoder/` 等的目录。
+
+2. 把整个 `openai_shap-e` 目录拷到本项目所在机器（U 盘 / 局域网 / 网盘均可）。
+
+3. 启动服务或生成样例时，用 `LOCAL_MODEL_DIR` 指向它即可离线加载：
+   ```bash
+   # 实时服务（Linux/macOS）
+   LOCAL_MODEL_DIR=./openai_shap-e tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
+   # 离线生成 6 个样例 GLB
+   LOCAL_MODEL_DIR=./openai_shap-e tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/generate.py
+   ```
+   Windows PowerShell 写法：
+   ```powershell
+   $env:LOCAL_MODEL_DIR = "C:\路径\openai_shap-e"
+   tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
+   ```
+
+   **更省事（推荐）**：直接把权重目录改名为 `openai_shap-e` 放进
+   `tools/text_to_3d/weights/` 下（即 `tools/text_to_3d/weights/openai_shap-e/`），
+   脚本会**自动识别、无需设置任何环境变量**即可离线加载。
+
+   - 设置了 `LOCAL_MODEL_DIR` 且目录存在时，脚本强制 `local_files_only`，**绝不联网**；
+   - 不设置时仍走默认 `openai/shap-e`（首次联网拉取，走 `HF_ENDPOINT` 镜像）。
+
 ---
 
 ## 3. App 端接线（手机 ↔ 电脑）— 两种办法
