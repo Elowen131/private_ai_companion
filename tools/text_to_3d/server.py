@@ -265,8 +265,22 @@ class Handler(BaseHTTPRequestHandler):
         try:
             data = gen_cached(prompt, gs, steps, frame, seed)
         except Exception as e:  # noqa: BLE001
-            msg = json.dumps({"error": f"generation failed: {e}"}).encode()
-            self._send(500, msg)
+            import traceback as _tb
+            _tb.print_exc()
+            msg = str(e).lower()
+            hint = ""
+            if any(k in msg for k in (
+                "connection", "timeout", "url", "hf-mirror", "huggingface",
+                "download", "404", "403", "502", "resolve", "name or service",
+                "max retries", "timed out", "remote",
+            )):
+                hint = (" （权重下载失败：本机访问 hf-mirror.com / huggingface.co 失败或极慢。"
+                        "请换能正常访问这些站点的网络后重试，或把已下载好的权重缓存"
+                        " ~/.cache/huggingface 拷到本机。")
+            body = json.dumps(
+                {"error": f"generation failed: {e}{hint}"}, ensure_ascii=False
+            ).encode("utf-8")
+            self._send(500, body)
             return
         self._send(200, data, content_type="model/gltf-binary")
 
