@@ -99,8 +99,14 @@ tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
        --local-dir ./tools/text_to_3d/weights/openai_shap-e \
        --workers 16 --chunk-size 4
    ```
-   只用 Python 标准库，无额外依赖。它会自动把 `renderer` 的 fp16 权重复制一份给
-   `shap_e_renderer`（两者是同一 `ShapERenderer` 的副本），省下 863 MB 的 fp32 下载。
+   只用 Python 标准库，无额外依赖。下载完成后**必须再跑一次转换**：
+   ```bash
+   python tools/text_to_3d/convert_renderer.py
+   ```
+   原因：`shap_e_renderer` 的 fp32 `.bin` 里含 marching cubes 查找表
+   `mesh_decoder.cases`/`masks`（`renderer/` 的 fp16 权重没有），缺失会让
+   `decode_to_mesh` 抛 `torch.cat(): expected a non-empty list of Tensors`。
+   转换脚本把它转成完整的 fp16 safetensors，加载更快、内存减半。
 
 2. 把整个 `openai_shap-e` 目录拷到本项目所在机器（U 盘 / 局域网 / 网盘均可）。
 

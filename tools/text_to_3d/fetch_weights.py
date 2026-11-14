@@ -30,16 +30,20 @@ import urllib.request
 REPO = "openai/shap-e"
 
 # 运行 diffusers 0.43 ShapEPipeline(variant="fp16", use_safetensors=True)
-# 所需的最小文件集。shap_e_renderer 的 fp16 权重由 renderer 的复制而来
-# （两者是同一 ShapERenderer 的两个副本，fp16 大小恰为 fp32 的一半）。
+# 所需文件集。注意：
+# - model_index.json 里的 "renderer" 会被 diffusers 忽略（__init__ 只接受
+#   5 个组件），真正加载的是 "shap_e_renderer"。
+# - shap_e_renderer 的 fp32 .bin 含 marching cubes 的 mesh_decoder.cases/masks
+#   查找表，renderer 的 fp16 权重里没有；直接用 renderer 的 fp16 会导致
+#   decode_to_mesh 产出空列表（torch.cat 报错）。因此 .bin 必须下载，
+#   再由 convert_renderer.py 转成完整的 fp16 safetensors。
 FILES = {
     "model_index.json": 458,
     "prior/config.json": 489,
     "prior/diffusion_pytorch_model.fp16.safetensors": 631435880,
-    "renderer/config.json": 496,
-    "renderer/diffusion_pytorch_model.fp16.safetensors": 452597858,
     "scheduler/scheduler_config.json": 276,
     "shap_e_renderer/config.json": 551,
+    "shap_e_renderer/diffusion_pytorch_model.bin": 905233202,
     "text_encoder/config.json": 626,
     "text_encoder/model.fp16.safetensors": 247324608,
     "tokenizer/merges.txt": 524619,
@@ -48,11 +52,6 @@ FILES = {
     "tokenizer/vocab.json": 1059962,
     "README.md": 3899,
     ".gitattributes": 1477,
-}
-
-# 仅当确实需要 fp32 渲染器时才加（--with-fp32-renderer）
-OPTIONAL_FP32 = {
-    "shap_e_renderer/diffusion_pytorch_model.bin": 905233202,
 }
 
 _print_lock = threading.Lock()
@@ -188,14 +187,10 @@ def fetch_big(name, size, dest, endpoint, chunk_mb, workers, retries):
     if os.path.getsize(tmp) != size:
         raise RuntimeError(f"{name}: merged size mismatch")
     os.replace(tmp, dest)
-    # 清理分块
-    try:
-        for i in range(len(tasks)):
-            os.remove(os.path.join(part_dir, f"{i:05d}.part"))
-        os.rmdir(part_dir)
-    except OSError:
-        pass
-    log(f"OK {name} ({size/1024/1024:.0f} MB)")
+    # 刻意不逐个删除分块：某些受限环境（如 CI/沙箱）会拦截「批量删除 ≥50 文件」
+    # 并中断整个进程。分块留在 .parts/ 下，已被 .gitignore 忽略；重跑时
+    # 目标文件已完整会直接跳过，分块可事后一次性手动清理。
+    log(f"OK {name} ({size/1024/1024:.0f} MB); parts kept at {part_dir}")
 
 
 def main():
@@ -205,12 +200,9 @@ def main():
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--chunk-size", type=int, default=4, help="每块 MB")
     ap.add_argument("--retries", type=int, default=6)
-    ap.add_argument("--with-fp32-renderer", action="store_true")
     args = ap.parse_args()
 
     files = dict(FILES)
-    if args.with_fp32_renderer:
-        files.update(OPTIONAL_FP32)
 
     _state["total"] = sum(files.values())
     os.makedirs(args.local_dir, exist_ok=True)
@@ -241,14 +233,8 @@ def main():
     elapsed = time.time() - _t0
     log(f"ALL DONE in {elapsed/60:.1f} min -> {args.local_dir}")
 
-    # 把 renderer 的 fp16 复制给 shap_e_renderer（同一 ShapERenderer，省 863MB 下载）
-    src = os.path.join(args.local_dir, "renderer", "diffusion_pytorch_model.fp16.safetensors")
-    dst = os.path.join(args.local_dir, "shap_e_renderer", "diffusion_pytorch_model.fp16.safetensors")
-    if os.path.exists(src) and not os.path.exists(dst):
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        import shutil
-        shutil.copyfile(src, dst)
-        log("copied renderer fp16 -> shap_e_renderer fp16 (same ShapERenderer)")
+    log("Next step: run convert_renderer.py to build the complete fp16 "
+        "safetensors (with mesh_decoder.cases/masks) from the fp32 .bin")
 
     # 完整性校验
     missing = []
