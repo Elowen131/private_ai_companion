@@ -302,7 +302,7 @@ class SDFShape:
     # ------------------------------------------------------------ 等值面
     def build(self, res: int = 72, fur_count: int = 7000, seed: int = 7,
               fur_length: float = 0.032, fur_radius: float = 0.0085,
-              noise_strength: float = 0.11):
+              noise_strength: float = 0.11, dorsal_shade: float = 0.0):
         lo, hi = self.bounds()
         step = float((hi - lo).max() / res)
         shape = tuple((np.ceil((hi - lo) / step) + 1).astype(int))
@@ -322,6 +322,13 @@ class SDFShape:
             n3 = _value_noise(verts, 83.0, seed + 7)
             tex = (n1 - 0.5) * 0.55 + (n2 - 0.5) * 0.30 + (n3 - 0.5) * 0.15
             colors = np.clip(colors * (1.0 + noise_strength * tex[:, None] * 2.2), 0, 1)
+
+        # 背腹渐变：真实 mammals 背部毛色深、腹侧浅。用连续明度 ramp 而不是
+        # 再堆一个深色椭球，避免交界出现色块，也不会盖掉白爪 / 胸口等局部毛色。
+        if dorsal_shade > 0:
+            t = np.clip((verts[:, 1] - lo[1]) / max(hi[1] - lo[1], 1e-6), 0.0, 1.0)
+            ramp = 1.0 + dorsal_shade * (0.5 - t) * 2.0   # 上深 / 下浅
+            colors = np.clip(colors * ramp[:, None], 0, 1)
 
         if fur_count > 0:
             fv, ff, fc, fn = self._fur(verts, faces, colors, normals, furw,
@@ -507,11 +514,13 @@ class SDFShape:
         jitter = (rng.normal(0, 0.28, (K, 1)) * t1 +
                   rng.normal(0, 0.28, (K, 1)) * t2)
         D = _unit(N + jitter + flow)
-        # 绝大多数是贴体的短绒，极少数略长用来打破轮廓的完美圆弧。
-        # 绒毛越长越粗、颜色越偏离底色，就越像「刺」而不是「毛」。
-        long = rng.random(K) < 0.08
-        L = length * (0.62 + 0.62 * rng.random(K)) * np.where(long, 1.45, 1.0)
-        R = radius * (0.70 + 0.60 * rng.random(K))
+        # 三层毛被：贴体底绒 / 中层毛 / 少量更细长的轮廓毛。单一长度的绒毛
+        # 会把轮廓修成完美圆弧，看起来像玩偶；分层后才接近真实毛皮。
+        # 长毛同时收细，否则又变成一根根「刺」。
+        tier = rng.random(K)
+        L = length * (0.55 + 0.58 * rng.random(K)) * np.where(
+            tier < 0.03, 2.05, np.where(tier < 0.16, 1.45, 1.0))
+        R = radius * (0.66 + 0.56 * rng.random(K)) * np.where(tier < 0.03, 0.82, 1.0)
         base = P + N * 0.0015
         tip = base + D * L[:, None]
         ang = rng.uniform(0, 2 * np.pi, (K, 1)) + np.array([0, 2 * np.pi / 3, 4 * np.pi / 3])

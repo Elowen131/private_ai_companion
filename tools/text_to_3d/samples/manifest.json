@@ -5,7 +5,7 @@
     "prompt": "a cute fluffy cartoon dog",
     "file": "dog.glb",
     "source": "procedural-sdf",
-    "rev": 3
+    "rev": 4
   },
   {
     "id": "cat",
@@ -13,7 +13,7 @@
     "prompt": "a cute fluffy cartoon cat",
     "file": "cat.glb",
     "source": "procedural-sdf",
-    "rev": 3
+    "rev": 4
   },
   {
     "id": "dragon",
@@ -21,7 +21,7 @@
     "prompt": "a cute green dragon",
     "file": "dragon.glb",
     "source": "procedural-sdf",
-    "rev": 3
+    "rev": 4
   },
   {
     "id": "robot",
@@ -29,7 +29,7 @@
     "prompt": "a friendly robot",
     "file": "robot.glb",
     "source": "procedural-sdf",
-    "rev": 3
+    "rev": 4
   },
   {
     "id": "chair",
@@ -37,7 +37,7 @@
     "prompt": "a wooden chair",
     "file": "chair.glb",
     "source": "procedural-sdf",
-    "rev": 3
+    "rev": 4
   },
   {
     "id": "flower",
@@ -45,6 +45,6 @@
     "prompt": "a pink flower",
     "file": "flower.glb",
     "source": "procedural-sdf",
-    "rev": 3
+    "rev": 4
   }
 ]

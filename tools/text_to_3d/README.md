@@ -199,13 +199,25 @@ App 内：进入「文生 3D（本地 AI）」页面 → 输入提示词（中�
 
 ### 4.1 样例来源：SDF 融合曲面（不是 Shap-E）
 
-> ⚠️ 2026-11-14 样例共三代：`generate.py`（Shap-E text300M @ CPU）产出的是
+> ⚠️ 2026-11-14 样例共四代：`generate.py`（Shap-E text300M @ CPU）产出的是
 > **融化状团块**；第二代基础几何体硬拼虽能辨认，但球/圆柱相贯处是硬折线、
-> 完全没有毛绒质感。现在用 `fuzzy_sdf.py` 的**有符号距离场 + 局部
-> polynomial smooth-min**：头、身、四肢、耳朵、尾巴在同一张连续曲面上平滑
-> 过渡（几何 C1 连续，法线直接取 SDF 梯度）；动物表面再叠一层短绒几何、
-> 绒面噪声毛色与 `KHR_materials_sheen` 织物材质。五官（眼白/瞳/高光/鼻头）
-> 比 SDF 网格格子还小，改用高精度部件单独叠加，并在周围清出无毛区。
+> 完全没有毛绒质感；第三代 SDF 融合曲面解决了接缝与毛绒，但仍是「一个椭球
+> 当身子 + 四根圆柱当腿」的玩偶比例。**当前第四代按动物解剖分节重建**。
+>
+> 底层仍是 `fuzzy_sdf.py` 的有符号距离场 + 局部 polynomial smooth-min：
+> 头、身、四肢、耳朵、尾巴在同一张连续曲面上平滑过渡（几何 C1 连续，
+> 法线直接取 SDF 梯度），五官（眼白/瞳/高光/鼻头）因小于网格格子而用
+> 高精度部件单独叠加，并在周围清出无毛区。
+>
+> 第四代新增：
+> - **躯干三段**（胸廓 / 收窄的腰 / 臀）+ 腹侧浅毛 + 明确的颈，背线有起伏；
+> - **肩胛 / 髋隆起**；四肢分上臂-肘-前臂-腕-脚掌，后腿带膝与跗的折角，
+>   脚掌是有厚度的扁椭球而不是球；
+> - 头分颅骨 / 额段(stop) / 口吻 / 下颌，垂耳有耳根与耳廓厚度；
+> - 猫科特征：楔形头、直立三角耳、细长带弧度的尾；龙的翼加前缘翼骨与翼指；
+> - `dorsal_shade` 连续背腹明度渐变（背深腹浅）、三层毛被
+>   （贴体底绒 / 中层 / 少量细长轮廓毛）、毛流朝后下。
+>
 > 请勿再运行 `generate.py` 覆盖样例目录。
 
 ```bash
@@ -257,7 +269,7 @@ id 必须与 `lib/core/avatar3d/route_c_glb_store.dart` 的 `routeCSamples` 对�
 `build_samples.py` 的 `SAMPLE_REV` 与
 `lib/core/avatar3d/route_c_glb_store.dart` 的 `sampleRevision` **必须一致**。
 缓存文件名是 `<id>_v<rev>.glb`：换造型时两边同步 +1，新 APK 才不会读到
-上一代模型。当前为 **rev 3**（按真实 SDF 表面嵌入眼珠）。App 样例区另有「刷新样例」按钮，逐个 `forceRefresh` 覆盖下载
+上一代模型。当前为 **rev 4**（动物按解剖分节重建）。App 样例区另有「刷新样例」按钮，逐个 `forceRefresh` 覆盖下载
 （下载失败时旧缓存仍在，离线演示不丢）。
 
 App 端逻辑在 `RouteCGlbStore.loadSample`：私有目录有缓存就直接读，
@@ -307,6 +319,46 @@ python tools/gguf_server.py --dir ./tools/gguf_models --host 0.0.0.0 --port 8080
 
 App 端「模型源与下载」页同样会自动探测 8080 并覆盖内置源地址
 （`ModelSource.overrideBuiltInHost`），结果持久化，换 Wi-Fi 可点「重新扫描」。
+
+### 5.6 外置高精 3D 资产：人形不再用简单几何堆砌
+
+App 内纯 Dart 程序化人形只有约 4,662 个三角形、顶点色、零贴图，
+渲染出来是梯形躯干 + 圆柱四肢 + 球头，肉眼就是「简单几何堆砌」。
+项目里其实早就有**网页交付版同款的高精 GLB**，但通道一直没真正生效：
+
+| 资产 | 位置 | 规模 |
+| --- | --- | --- |
+| `cen_youheng_3d.glb` | `tools/gguf_models/high_poly/` | 303,460 顶点 / 499,480 三角形 / 3 张贴图，半写实人形 |
+| `cen_youheng_q_version.glb` | 同上 | 39,551 顶点 / 59,988 三角形 / 3 张贴图 |
+| `Fox / Duck / Horse / BarramundiFish.glb` | `tools/gguf_models/pets/` | CC0 真实网格（Fox 带骨骼动画与毛色贴图） |
+
+之前不生效的两个原因：
+
+1. `HighPolyGlbManifest.defaultBaseUrl` / `PetGlbAssets.defaultBaseUrl`
+   都写死 `http://127.0.0.1:8080` —— 真机上指向**手机自己**；
+2. 即便本地已有资产，也要用户手动点「下载」再点「启用」两步，
+   默认永远显示程序化低模。
+
+新增 `lib/core/net/local_asset_urls.dart` 统一处理：复用
+`LocalServiceDiscovery` 探 8080 的 `/manifest.json`（特征串
+`"url": "models/`），命中后把两份清单的 `baseUrl` 改到
+`http://<电脑IP>:8080/models/high_poly` 与 `/models/pets`。
+服务端 `_safe_path()` 支持子目录并做 realpath 越界校验，实测 206 可用。
+
+App 行为：
+
+- **工坊**：探测到本机源且本地没有高精网格时，后台自动下载标准版并启用；
+  已下载过则默认启用。用户主动「切回程序化」会记住，不再自动下载。
+  下载完直接切换，不用再点一次「启用」。高精区显示当前本机源地址。
+- **生活 / 宠物页**：已登记物种的 GLB 在后台自动拉取，完成后自动从
+  程序化生物切到真实网格；失败静默回落，不阻塞首帧、不留白屏。
+- UI 如实标注：这些高精人形 `skins == 0 / animations == 0`，
+  **不会动，87 项调参、动作播放、分部位拾取不作用于它**；
+  宠物资产除 Fox 外也多为 CC0 低模示例，不是照片级写实动物。
+  未登记物种仍走 `creature_builder.dart` 的程序化网格。
+
+资产**不打进 APK**（PRD 11.3），卸载 App 即清除；同 Wi-Fi 从 PC 拉取，
+不耗手机流量。未连接本机源时程序化造型仍是完整可用的离线兜底。
 
 ---
 

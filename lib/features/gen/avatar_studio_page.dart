@@ -25,6 +25,7 @@ import 'package:private_ai_companion/core/desktop/desktop_overlay_service.dart';
 import 'package:private_ai_companion/core/desktop/persona_visual_spec.dart';
 import 'package:private_ai_companion/core/media/persona_media.dart';
 import 'package:private_ai_companion/core/models/persona.dart';
+import 'package:private_ai_companion/core/net/local_asset_urls.dart';
 import 'package:private_ai_companion/core/persona/persona_service.dart';
 
 /// 3D 造型工坊。
@@ -143,6 +144,9 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
   /// 会抛异常，这里静默降级为「高精入口不可用」，绝不影响程序化造型主流程。
   Future<void> _initHighPoly() async {
     try {
+      // 资产下载基址写死 127.0.0.1 时真机永远拉不到高精模型；先按局域网
+      // 找到真正跑着 gguf_server.py 的机器，再判断本地有没有就绪资产。
+      await LocalAssetUrls.configure();
       final dir = await getApplicationDocumentsDirectory();
       final store = HighPolyGlbStore(dir.path);
       if (!mounted) {
@@ -165,10 +169,70 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
         if (savedId != null && (ready[savedId] ?? false)) {
           _highPolyId = savedId;
           _highPolyEnabled = savedEnabled;
+        } else {
+          // 用户从未选过：只要本地已有一份高精网格就默认启用。
+          // 否则打开工坊看到的仍是梯形躯干 + 圆柱四肢的程序化人形 ——
+          // 用户明确要求「人形不许只用简单几何堆砌」。
+          final firstReady = HighPolyGlbManifest.entries
+              .where((e) => ready[e.id] ?? false)
+              .firstOrNull;
+          if (firstReady != null) {
+            _highPolyId = firstReady.id;
+            _highPolyEnabled = true;
+          }
         }
       });
+      // 本机源可达、本地又还没有高精网格时，后台自动拉取标准版
+      // （30 万顶点 / 50 万三角形，半写实人形）。用户明确要求「人形不许
+      // 只用简单几何堆砌」，不能把这件事留成一个需要手动点的开关。
+      // 用户此前主动「切回程序化」过则尊重选择，不再自动下载。
+      final userOptedOut = savedId != null && !savedEnabled;
+      if (!_highPolyEnabled && !userOptedOut && LocalAssetUrls.ready) {
+        unawaited(_autoFetchHighPoly());
+      }
     } catch (_) {
       // 缺少平台通道时保持 _glbStore == null，UI 显示不可用提示。
+    }
+  }
+
+  /// 后台拉取并启用高精人形 GLB，完成后自动切换；失败静默保留程序化模型。
+  Future<void> _autoFetchHighPoly() async {
+    final store = _glbStore;
+    final entry = HighPolyGlbManifest.byId('humanoid_standard');
+    if (store == null || entry == null || !LocalAssetUrls.ready) return;
+    if (store.isReady(entry) || _highPolyBusy || _highPolyEnabled) return;
+    if (!mounted) return;
+    setState(() {
+      _highPolyBusy = true;
+      _highPolyProgress = 0;
+      _highPolyError = null;
+    });
+    try {
+      await for (final progress in store.download(entry)) {
+        if (!mounted) return;
+        setState(() => _highPolyProgress = progress < 0 ? null : progress);
+      }
+      final ok = await store.verify(entry);
+      if (!mounted) return;
+      setState(() {
+        _highPolyBusy = false;
+        _highPolyProgress = null;
+        _highPolyReady[entry.id] = ok;
+        if (ok) {
+          _highPolyId = entry.id;
+          _highPolyEnabled = true;
+        } else {
+          _highPolyError = '自动下载校验未通过，可手动重试';
+        }
+      });
+      if (ok) await store.saveSelection(entry.id, true);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _highPolyBusy = false;
+        _highPolyProgress = null;
+        _highPolyError = '自动下载失败，仍使用程序化造型；可点下方按钮重试';
+      });
     }
   }
 
@@ -190,6 +254,8 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
   Future<void> _downloadHighPoly(HighPolyGlbEntry entry) async {
     final store = _glbStore;
     if (store == null || _highPolyBusy) return;
+    // 手动重试时重新扫一次，避免首次探测失败后一直沿用死地址。
+    await LocalAssetUrls.configure(force: true);
     setState(() {
       _highPolyBusy = true;
       _highPolyProgress = 0;
@@ -207,9 +273,16 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
         _highPolyBusy = false;
         _highPolyProgress = null;
         _highPolyReady[entry.id] = ok;
-        if (!ok) _highPolyError = '校验未通过，请删除后重试';
+        if (ok) {
+          // 下载完直接切到高精网格，不再要求用户多点一次「启用」。
+          _highPolyId = entry.id;
+          _highPolyEnabled = true;
+        } else {
+          _highPolyError = '校验未通过，请删除后重试';
+        }
       });
-      _toast(ok ? '高精模型已下载，点「启用」即可切换' : '下载完成但校验未通过');
+      if (ok) await store.saveSelection(entry.id, true);
+      _toast(ok ? '高精模型已下载并启用' : '下载完成但校验未通过');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1339,10 +1412,33 @@ class _AvatarStudioPageState extends State<AvatarStudioPage> {
               ),
               const SizedBox(height: 4),
               const Text(
-                '网页交付版同款 GLB，按需下载到本机，不占安装包体积。'
-                '有清晰眼睛、五官与布料贴图；相对程序化低多边形是数量级提升，'
-                '但仍属半写实风格化 3D，不是照片级真人。',
+                '网页交付版同款 GLB（30 万顶点 / 50 万三角形），按需下载到本机，'
+                '不占安装包体积。有清晰眼睛、五官与布料贴图；相对程序化低多边形'
+                '是数量级提升，但仍属半写实风格化 3D，不是照片级真人。',
                 style: TextStyle(fontSize: 10.5, color: Colors.grey),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Icon(
+                    LocalAssetUrls.ready
+                        ? Icons.check_circle_outline
+                        : Icons.wifi_off_outlined,
+                    size: 12,
+                    color: LocalAssetUrls.ready ? Colors.green : Colors.orange,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      LocalAssetUrls.ready
+                          ? '本机源 ${LocalAssetUrls.label}：会自动下载并切换到高精网格'
+                              '（同一 Wi-Fi，不耗手机流量）'
+                          : '未发现本机源，暂用程序化造型；在电脑上运行'
+                              ' tools/gguf_server.py 后会自动升级为高精网格',
+                      style: const TextStyle(fontSize: 10, color: Colors.grey),
+                    ),
+                  ),
+                ],
               ),
               if (store == null)
                 const Padding(

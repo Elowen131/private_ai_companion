@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -14,6 +16,7 @@ import 'package:private_ai_companion/core/life/life_world_service.dart';
 import 'package:private_ai_companion/core/models/avatar_profile.dart';
 import 'package:private_ai_companion/core/models/child.dart';
 import 'package:private_ai_companion/core/models/pet.dart';
+import 'package:private_ai_companion/core/net/local_asset_urls.dart';
 
 /// 全域 3D 形象页：模板套用 / 手动捏脸 / 多套形象保存切换 / 成长阶段重建。
 ///
@@ -97,14 +100,40 @@ class _LifeAvatarPageState extends State<LifeAvatarPage> {
       return;
     }
     try {
+      // 高精资产的下载基址在真机上必须指向 PC 而不是手机自己。
+      await LocalAssetUrls.configure();
       final dir = await getApplicationDocumentsDirectory();
       final store = _petStore ??= PetGlbStore(dir.path);
       final ready = await store.verify(asset);
       _petReady = ready;
       _useGlb = ready;
+      if (!ready && LocalAssetUrls.ready) {
+        // 已找到本机源但资产还没下过：后台拉取真实网格，完成后自动切换。
+        // 不阻塞首帧，失败就继续用程序化模型，绝不留白屏。
+        unawaited(_autoFetchPetAsset(store, asset));
+      }
     } catch (_) {
       _petReady = false;
       _useGlb = false;
+    }
+  }
+
+  /// 同 Wi-Fi 从 PC 拉取已登记的宠物 GLB（Fox / Duck / Horse / Fish），
+  /// 下载器自带断点续传与 SHA-256 校验，通过后自动启用真实网格。
+  Future<void> _autoFetchPetAsset(
+    PetGlbStore store,
+    PetGlbAsset asset,
+  ) async {
+    try {
+      await store.download(asset).drain<void>();
+      final ok = await store.verify(asset);
+      if (!mounted || !ok) return;
+      setState(() {
+        _petReady = true;
+        _useGlb = true;
+      });
+    } catch (_) {
+      // 静默回落：程序化模型仍在，用户不会看到错误弹窗或空白区。
     }
   }
 
