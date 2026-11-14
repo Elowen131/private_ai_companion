@@ -1,8 +1,13 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:private_ai_companion/app/di.dart';
 import 'package:private_ai_companion/core/model/model_info.dart';
 import 'package:private_ai_companion/core/model/model_manager.dart';
+import 'package:private_ai_companion/core/model/model_registry.dart';
 import 'package:private_ai_companion/core/model/model_source.dart';
+import 'package:private_ai_companion/core/net/local_service_discovery.dart';
 
 /// 模型源与下载页（自托管 GGUF 下载源骨架的核心 UI）。
 ///
@@ -23,6 +28,72 @@ class ModelCatalogPage extends StatefulWidget {
 class _ModelCatalogPageState extends State<ModelCatalogPage> {
   final _manager = getIt<ModelManager>();
 
+  bool _probing = true;
+  String? _foundHost;
+
+  @override
+  void initState() {
+    super.initState();
+    _autoDiscover();
+  }
+
+  /// 自动找到电脑上跑着 gguf_server.py 的地址，并覆盖内置源。
+  /// 真机写死 127.0.0.1 指向手机自己，永远连不上，这是「模型下不了」的根因。
+  Future<void> _autoDiscover({bool forceScan = false}) async {
+    if (!mounted) return;
+    setState(() => _probing = true);
+    final saved = await _readSavedHost();
+    final found = await LocalServiceDiscovery.probe(
+      port: 8080,
+      healthPath: '/manifest.json',
+      expectSubstring: '"models"',
+      lastKnown: saved,
+      scanSubnet: forceScan,
+    );
+    if (found != null) {
+      ModelSource.overrideBuiltInHost(found);
+      await _saveHost(found);
+    }
+    if (!mounted) return;
+    setState(() {
+      _probing = false;
+      _foundHost = found;
+    });
+  }
+
+  Future<File?> _hostFile() async {
+    try {
+      final d = await getApplicationDocumentsDirectory();
+      return File('${d.path}/gguf_service_host.txt');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _readSavedHost() async {
+    try {
+      final f = await _hostFile();
+      if (f != null && await f.exists()) {
+        final v = (await f.readAsString()).trim();
+        return v.isEmpty ? null : v;
+      }
+    } catch (_) {
+      // 忽略损坏的偏好文件
+    }
+    return null;
+  }
+
+  Future<void> _saveHost(String host) async {
+    try {
+      final f = await _hostFile();
+      if (f == null) return;
+      await f.parent.create(recursive: true);
+      await f.writeAsString(host, flush: true);
+    } catch (_) {
+      // 落盘失败不影响本次会话
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final srcs = _manager.sources.all();
@@ -35,17 +106,55 @@ class _ModelCatalogPageState extends State<ModelCatalogPage> {
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Text(
               '模型全部本地运行、按需下载，不打进安装包。\n'
-              '默认源指向电脑上的自托管服务，三步即可下载：\n'
-              '1) 电脑运行：python tools/gguf_server.py --dir ./gguf_models '
-              '--advertise-host 127.0.0.1\n'
-              '2) USB 连接后运行：adb reverse tcp:8080 tcp:8080\n'
-              '3) 展开下方「本机自托管源」，点模型右侧按钮下载（带 SHA-256 校验）。\n'
-              '把合规的 GGUF / ONNX 放进 gguf_models 目录就会出现在清单里；'
-              '也可点下方按钮添加自己的 NAS / HTTPS 源。',
+              '① 内置清单里的「可下载」项直连免费开源模型，无需电脑。\n'
+              '② 「本机自托管源」会自动在局域网里找电脑上的服务，'
+              '找到即可从电脑高速下载（不耗手机流量）。\n'
+              '电脑启动命令：python tools/gguf_server.py --dir ./tools/gguf_models '
+              '--host 0.0.0.0 --port 8080',
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           ),
-          ...srcs.map((s) => SourceCard(manager: _manager, source: s)),
+          Row(
+            children: [
+              if (_probing)
+                const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(
+                  _foundHost != null ? Icons.check_circle : Icons.info_outline,
+                  size: 14,
+                  color: _foundHost != null ? Colors.green : Colors.grey,
+                ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  _probing
+                      ? '正在自动寻找局域网内的模型服务…'
+                      : _foundHost != null
+                          ? '已找到模型服务：$_foundHost'
+                          : '未发现局域网服务；内置清单的「可下载」项仍可用。',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.radar, size: 14),
+                label: const Text('重新扫描', style: TextStyle(fontSize: 11)),
+                onPressed: _probing ? null : () => _autoDiscover(forceScan: true),
+              ),
+            ],
+          ),
+          // 探测完成后才建卡片：否则卡片会用旧的 127.0.0.1 拉一次清单并缓存失败。
+          if (!_probing)
+            ...srcs.map(
+              (s) => SourceCard(
+                key: ValueKey('${s.id}:${s.baseUrl}'),
+                manager: _manager,
+                source: s,
+              ),
+            ),
           const SizedBox(height: 12),
           FilledButton.icon(
             icon: const Icon(Icons.add),
@@ -54,19 +163,23 @@ class _ModelCatalogPageState extends State<ModelCatalogPage> {
           ),
           const SizedBox(height: 16),
           const Text(
-            '内置示例清单（占位，不可下载）',
+            '内置模型清单',
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 4),
             child: Text(
-              '下面这些只是展示模型类型用的条目，地址是示例域名，按钮被禁用。'
-              '真实模型请从上方自托管源下载。',
+              '标注「可下载」的是真实免费开源模型，点下载即可（带 SHA-256 校验）。'
+              '其余为类型展示占位，需自行托管合规下载源。',
               style: TextStyle(fontSize: 11, color: Colors.grey),
             ),
           ),
           ..._manager.builtInModels().map(
-            (m) => CatalogModelTile(manager: _manager, info: m, disabled: true),
+            (m) => CatalogModelTile(
+              manager: _manager,
+              info: m,
+              disabled: ModelRegistry.isPlaceholder(m),
+            ),
           ),
         ],
       ),

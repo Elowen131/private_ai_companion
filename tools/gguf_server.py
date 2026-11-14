@@ -139,7 +139,19 @@ def is_metadata_file(name: str) -> bool:
     )
 
 
-def build_manifest(root: str, base_url: str, name: str) -> dict:
+def build_manifest(root: str, base_url: str, name: str,
+                   relative_urls: bool = False) -> dict:
+    """生成 manifest。
+
+    [relative_urls] 为真时只写相对路径 `models/<file>`，由 App 侧按它自己
+    访问本服务时用的 baseUrl 解析（见 model_manifest.dart `_resolveUrl`）。
+
+    为什么默认关掉、但对外请求默认打开：早期实现把 `--advertise-host` 拼成
+    绝对 URL 写死在 manifest 里。服务用 `--advertise-host 127.0.0.1` 启动时，
+    手机通过 `http://192.168.x.x:8080/manifest.json` 明明拉到了清单，点下载却
+    去连手机自己的 127.0.0.1:8080 —— 表现为「模型怎么都下不下来」。
+    相对路径让下载地址永远跟随请求方实际使用的 Host，彻底消除这个错配。
+    """
     models = []
     overrides = read_meta(root)
     for entry in sorted(os.listdir(root)):
@@ -156,7 +168,10 @@ def build_manifest(root: str, base_url: str, name: str) -> dict:
         if not isinstance(m, dict):
             m = {}
         sha = sha_for_file(full, st)
-        url = m.get("url") or (base_url.rstrip("/") + "/models/" + quote(entry))
+        if relative_urls:
+            url = m.get("url") or ("models/" + quote(entry))
+        else:
+            url = m.get("url") or (base_url.rstrip("/") + "/models/" + quote(entry))
         models.append(
             {
                 "id": entry,
@@ -227,8 +242,12 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path.rstrip("/") in ("/manifest.json", "/manifest"):
+            # 对外清单用相对 URL：下载地址跟随请求方实际使用的 Host。
+            # 这样无论手机走 USB(127.0.0.1) 还是 Wi-Fi(192.168.x.x) 都指向
+            # 它自己能连上的那台机器，不会再被写死的 advertise-host 带偏。
             data = json.dumps(
-                build_manifest(self.server.root, self.server.base_url, self.server.name),
+                build_manifest(self.server.root, self.server.base_url,
+                               self.server.name, relative_urls=True),
                 ensure_ascii=False,
                 indent=2,
             ).encode("utf-8")

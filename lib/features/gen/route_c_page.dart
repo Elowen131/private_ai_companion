@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:private_ai_companion/core/avatar3d/glb_pet_viewer.dart';
 import 'package:private_ai_companion/core/avatar3d/route_c_glb_store.dart';
 import 'package:private_ai_companion/core/avatar3d/route_c_prompts.dart';
+import 'package:private_ai_companion/core/net/local_service_discovery.dart';
 
 /// 路线 C：文生 3D（本地 AI，零花费）。
 ///
@@ -15,15 +16,19 @@ import 'package:private_ai_companion/core/avatar3d/route_c_prompts.dart';
 /// 推理、无需 API key、无需联网）→ 服务返回 GLB 字节 → 落盘到应用私有目录 →
 /// 用 [GlbPetViewer] 以 `file://` 渲染。
 ///
-/// 设备侧通过 `adb reverse tcp:8765 tcp:8765` 把 127.0.0.1:8765 指到 PC。
+/// 地址自动发现：启动时探测局域网内跑着 server.py 的那台机器（也兼容
+/// adb reverse 的 127.0.0.1 与模拟器的 10.0.2.2），成功后记进偏好，下次直连。
+/// 不再要求用户手填电脑 IP，也不依赖会随会话失效的 adb reverse。
 ///
 /// 样例兜底：GLB 不随包分发（PRD 11.3），首次由本地服务 `/api/sample/<id>`
 /// 下发并缓存到应用私有目录，之后无服务、无网也能演示。
 ///
 /// 诚实边界（UI 必须如实展示，不粉饰）：
-/// - 模型是 Shap-E text300M，产出是**风格化、低面数**的 3D，不是照片级写实；
+/// - 「样例」是本地**程序化建模**生成的卡通模型，形状清晰可辨认，不是 AI 生成；
+/// - 「生成」走的是 Shap-E text300M（2023 年的小模型），在纯 CPU 上降参数推理，
+///   产出是**融化状、难以辨认**的低质量网格，仅作能力验证，别指望它像照片；
 /// - 中文经本地词表翻译，复杂句式请直接用英文；
-/// - 实时生成依赖本机 PC 服务 + adb reverse，手机不跑模型。
+/// - 实时生成依赖本机 PC 服务，手机本身不跑模型。
 class RouteCPage extends StatefulWidget {
   const RouteCPage({super.key});
 
@@ -42,7 +47,8 @@ class _RouteCPageState extends State<RouteCPage> {
   static const int _kTimeoutSeconds = 900;
 
   final _promptCtl = TextEditingController();
-  final _hostCtl = TextEditingController(text: '127.0.0.1:8765');
+  // 初始留空，由自动探测填写；探测失败时回退到 adb reverse 的回环地址。
+  final _hostCtl = TextEditingController();
 
   RouteCGlbStore? _store;
   String? _src;
@@ -50,11 +56,67 @@ class _RouteCPageState extends State<RouteCPage> {
   bool _busy = false;
   String? _status;
   String? _error;
+  bool _probing = true;
+  bool _serviceReachable = false;
 
   @override
   void initState() {
     super.initState();
     _initStore();
+  }
+
+  /// 上次连上的地址存在应用私有目录里（与样例缓存同目录），不引入额外依赖。
+  File? get _hostFile {
+    final d = _store?.dir;
+    return d == null ? null : File('$d/service_host.txt');
+  }
+
+  Future<String?> _readSavedHost() async {
+    try {
+      final f = _hostFile;
+      if (f != null && await f.exists()) {
+        final v = (await f.readAsString()).trim();
+        return v.isEmpty ? null : v;
+      }
+    } catch (_) {
+      // 偏好文件损坏不影响探测
+    }
+    return null;
+  }
+
+  Future<void> _saveHost(String host) async {
+    try {
+      final f = _hostFile;
+      if (f == null) return;
+      await f.parent.create(recursive: true);
+      await f.writeAsString(host, flush: true);
+    } catch (_) {
+      // 落盘失败不影响本次会话
+    }
+  }
+
+  /// 自动找到跑着 server.py 的那台机器并填入地址栏。
+  Future<void> _autoDiscover({bool forceScan = false}) async {
+    if (!mounted) return;
+    setState(() {
+      _probing = true;
+      _serviceReachable = false;
+    });
+    final saved = await _readSavedHost();
+    final found = await LocalServiceDiscovery.probe(
+      port: 8765,
+      healthPath: '/api/health',
+      expectSubstring: '"ok"',
+      lastKnown: saved,
+      scanSubnet: forceScan,
+    );
+    if (!mounted) return;
+    setState(() {
+      _probing = false;
+      _serviceReachable = found != null;
+      _hostCtl.text = found ?? saved ?? '127.0.0.1:8765';
+    });
+    if (found != null) await _saveHost(found);
   }
 
   @override
@@ -72,6 +134,8 @@ class _RouteCPageState extends State<RouteCPage> {
     } catch (_) {
       // 无平台通道时保持 _store == null，仅影响落盘，UI 仍可展示说明。
     }
+    // 目录就绪后再探测，这样「上次成功地址」有地方可存。
+    await _autoDiscover();
   }
 
   String get _baseUrl => 'http://${_hostCtl.text.trim()}';
@@ -160,10 +224,10 @@ class _RouteCPageState extends State<RouteCPage> {
       setState(() {
         _busy = false;
         _error = '连不上本地服务（$_baseUrl）\n'
-            '请确认：①PC 已运行 python tools/text_to_3d/server.py；'
-            '②USB 连手机后执行 adb reverse tcp:8765 tcp:8765；'
-            '③本页地址填的是 127.0.0.1:8765。\n'
-            '若样例之前已缓存过，点下方「样例」仍可离线查看。';
+            '点下方「重新扫描」会自动在同 Wi-Fi 局域网里找服务。\n'
+            '若仍失败，请确认电脑上运行了 '
+            'python tools/text_to_3d/server.py，且手机与电脑在同一 Wi-Fi。\n'
+            '样例若已缓存过，点下方「样例」仍可离线查看。';
       });
     } catch (e) {
       if (!mounted) return;
@@ -279,8 +343,10 @@ class _RouteCPageState extends State<RouteCPage> {
           ),
           const SizedBox(height: 6),
           const Text(
-            '本地 AI（Shap-E）把提示词变成可旋转的 3D 模型（GLB）。'
-            '全程在**你自己的电脑**上推理，免费、无需 API key、无需联网。',
+            '本地 AI（Shap-E）把提示词变成可旋转的 3D 模型。'
+            '全程在你自己的电脑上推理，免费、无需 API key、无需联网。'
+            '注意：Shap-E 是 2023 年的小模型，纯 CPU 下降参跑出来的形状很粗糙，'
+            '想要清晰可认的模型请用下方「样例」。',
             style: TextStyle(fontSize: 11.5, color: Colors.grey),
           ),
         ],
@@ -323,19 +389,40 @@ class _RouteCPageState extends State<RouteCPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.dns_outlined, size: 16),
-              SizedBox(width: 6),
-              Text(
+              const Icon(Icons.dns_outlined, size: 16),
+              const SizedBox(width: 6),
+              const Text(
                 '本机服务地址',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
               ),
-              Spacer(),
-              Text(
-                '默认 127.0.0.1:8765',
-                style: TextStyle(fontSize: 10.5, color: Colors.grey),
-              ),
+              const Spacer(),
+              if (_probing)
+                const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _serviceReachable ? Icons.check_circle : Icons.error_outline,
+                      size: 13,
+                      color: _serviceReachable ? Colors.green : cs.error,
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      _serviceReachable ? '已连接' : '未连接',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: _serviceReachable ? Colors.green : cs.error,
+                      ),
+                    ),
+                  ],
+                ),
             ],
           ),
           const SizedBox(height: 6),
@@ -352,9 +439,24 @@ class _RouteCPageState extends State<RouteCPage> {
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
-            '手机通过 adb reverse 把该地址指向 PC。改了 PC 端端口要同步改这里。',
-            style: TextStyle(fontSize: 10, color: Colors.grey),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _probing
+                      ? '正在局域网内自动寻找服务…'
+                      : _serviceReachable
+                          ? '已自动找到电脑，地址会记住；换 Wi-Fi 后点右侧重新扫描。'
+                          : '没找到服务，请确认电脑已启动 server.py 且与手机同一 Wi-Fi。',
+                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                ),
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.radar, size: 14),
+                label: const Text('重新扫描', style: TextStyle(fontSize: 11)),
+                onPressed: _probing ? null : () => _autoDiscover(forceScan: true),
+              ),
+            ],
           ),
         ],
       ),
@@ -424,14 +526,16 @@ class _RouteCPageState extends State<RouteCPage> {
               Icon(Icons.inventory_2_outlined, size: 16, color: cs.primary),
               const SizedBox(width: 6),
               const Text(
-                '样例（首次需连服务下载）',
+                '样例 · 清晰可辨认的卡通模型',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
               ),
             ],
           ),
           const SizedBox(height: 4),
           const Text(
-            'GLB 不随包分发（PRD 11.3）。首次点样例由本地服务下发并缓存到本机，之后无服务、无网也能直接渲染。',
+            '这批样例由本地程序化建模生成（小狗、小猫、小龙、机器人、木椅、花朵），'
+            '形体与配色明确，不是 AI 糊出来的团块。模型不随包分发（PRD 11.3）：'
+            '首次点样例由本地服务下发并缓存，之后无服务、无网也能直接渲染。',
             style: TextStyle(fontSize: 10.5, color: Colors.grey),
           ),
           const SizedBox(height: 8),
@@ -458,9 +562,11 @@ class _RouteCPageState extends State<RouteCPage> {
       borderRadius: BorderRadius.circular(10),
     ),
     child: const Text(
-      '诚实边界：模型为 Shap-E text300M，产出是风格化、低面数的 3D，'
-      '不是照片级写实；中文经本地词表翻译，复杂句式建议直接用英文；'
-      '实时生成依赖本机 PC 服务与 adb reverse，手机本身不跑模型。',
+      '诚实边界：①「样例」是程序化建模，形状清晰但不是 AI 生成；'
+      '②「生成」用 Shap-E text300M（2023 年小模型），CPU 降参推理产出是'
+      '融化状、难辨认的低质量网格，仅用于验证链路，不代表可用成品；'
+      '③中文经本地词表翻译，复杂句式建议直接用英文；'
+      '④实时生成依赖电脑上的本地服务，手机本身不跑模型。',
       style: TextStyle(fontSize: 10.5, color: Colors.grey),
     ),
   );

@@ -113,20 +113,26 @@ class ModelSource {
     builtIn: (j['builtIn'] as bool?) ?? false,
   );
 
-  /// 内置默认源：指向**本机自托管下载服务**（tools/gguf_server.py）。
+  /// 内置源使用的 `host:port`，可在运行时被地址自动发现覆盖。
   ///
-  /// 旧实现写死 `https://models.example.com`（占位示例域名，永远连不上），
-  /// 用户打开「模型源与下载」只会看到「清单拉取失败」，误以为下载功能坏了。
-  /// 改成回环地址后：PC 上启动 gguf_server.py，再做
-  /// `adb reverse tcp:8080 tcp:8080`，手机上的 127.0.0.1:8080 即指向 PC，
-  /// 内置源立刻可用；USB 直连也绕开了企业 Wi-Fi 客户端隔离（局域网 IP 互不可达）。
+  /// 真机上写死 127.0.0.1 指向手机自己，永远连不上电脑；而 adb reverse
+  /// 在会话结束后会失效。故由 UI 探测到实际可达地址后调用
+  /// [overrideBuiltInHost] 覆盖，并持久化，下次冷启动直接复用。
+  static String builtInHost = '127.0.0.1:8080';
+
+  static void overrideBuiltInHost(String host) {
+    final h = host.trim().replaceAll(RegExp(r'^https?://'), '');
+    if (h.isNotEmpty) builtInHost = h;
+  }
+
+  /// 内置源：指向**本机自托管下载服务**（tools/gguf_server.py）。
   ///
-  /// 服务未启动时 UI 会给出具体启动步骤，而不是抛一串异常。
-  /// 需要 NAS / 公网源时，仍可用「添加自托管源」填自己的地址。
-  static const ModelSource builtInSource = ModelSource(
+  /// 注意：这是 getter 而非常量，因为 [builtInHost] 会被自动发现改写。
+  /// `all()` 每次读取都会拿到最新地址。
+  static ModelSource get builtInSource => ModelSource(
     id: 'builtin',
-    name: '本机自托管源（127.0.0.1:8080）',
-    baseUrl: 'http://127.0.0.1:8080',
+    name: '本机自托管源（$builtInHost）',
+    baseUrl: 'http://$builtInHost',
     builtIn: true,
   );
 }

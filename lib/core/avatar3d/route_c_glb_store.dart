@@ -102,9 +102,14 @@ class RouteCGlbStore {
 
 /// 样例清单。
 ///
-/// GLB 由 tools/text_to_3d/generate.py 在本机用 Shap-E 离线生成，放在
+/// GLB 由 tools/text_to_3d/build_samples.py 在本机**程序化建模**生成（形状清晰
+/// 可辨认的卡通模型，不是 Shap-E 的融化状网格），放在
 /// `tools/text_to_3d/samples/`，由本地服务按需下发；**不进 APK**（PRD 11.3）。
 /// id 必须与服务端 `samples/{id}.glb` 文件名一致。
+///
+/// 历史教训：早期用 Shap-E（text300M）在 CPU 上降参批量生成的样例是畸形团块，
+/// 却因「只校验了 glTF 文件头与字节数」被当成成品。现在改动样例后必须先用
+/// tools/text_to_3d/render_glb.py 渲染三视图亲眼确认。
 class RouteCSample {
   final String id;
   final String name;

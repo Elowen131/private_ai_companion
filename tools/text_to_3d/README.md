@@ -132,13 +132,20 @@ tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/server.py
 
 ---
 
-## 3. App 端接线（手机 ↔ 电脑）— 两种办法
+## 3. App 端接线（手机 ↔ 电脑）— 自动发现，无需手填 IP
+
+> **2026-11-14 修复**：旧版地址栏默认写死 `127.0.0.1:8765`，在手机上这个地址
+> 指向**手机自己**，因此必然「连不上本地服务」。现已改为自动发现：
+> `lib/core/net/local_service_discovery.dart` 会依次试上次成功的地址、回环、
+> 模拟器别名（10.0.2.2）、同网段常见地址，必要时分批扫描整个 /24，
+> 谁先返回 `/api/health` 的 `{"ok":true}` 就用谁，结果记住下次直连。
+> 页面上有「已连接 / 未连接」状态灯与「重新扫描」按钮。
 
 ### 办法 A：同 Wi-Fi 直连（推荐，免装 adb）
 1. 电脑和手机连**同一个 Wi-Fi**。
 2. 服务以默认 `--host 0.0.0.0` 启动（或显式加上）。
-3. 电脑上查局域网 IP：`ipconfig` → 看「IPv4 地址」（如 `192.168.1.23`）。
-4. App 内「文生 3D（本地 AI）」页面，地址填 `http://192.168.1.23:8765` → 生成。
+3. 打开 App 的「文生 3D」页，地址会自动填好；若换过 Wi-Fi，点「重新扫描」。
+4. 自动发现失败时也可手动填电脑局域网 IP（`ipconfig` → IPv4 地址）。
 
 ### 办法 B：USB + adb reverse
 ```bash
@@ -190,13 +197,36 @@ App 内：进入「文生 3D（本地 AI）」页面 → 输入提示词（中�
 由本地服务的 `/api/sample/{id}` 按需下发。App 首次点样例时下载一次并缓存到
 应用私有目录 `route_c/samples/`，**之后无服务、无网也能直接渲染**。
 
-生成（在装有本地权重的机器上，CPU 约 2~3 分钟/张）：
+### 4.1 样例来源：程序化建模（不是 Shap-E）
+
+> ⚠️ **重要**：2026-11-14 起，样例改由 `build_samples.py` 程序化建模生成。
+> 原先 `generate.py` 用 Shap-E 在 CPU 上降参（steps=16 / frame_size=64）跑出来的
+> 产物是**融化状、无法辨认的团块**：所谓「狗」头尾不分、腿粘连，「龙」直接散架。
+> 拿这种东西当展示资产是不诚实的。请勿再运行 `generate.py` 覆盖样例目录，
+> 除非明确是要做「AI 生成能力验证」（结果会很难看）。
 
 ```bash
-tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/generate.py \
-    --steps 16 --frame-size 64
-# 产物：tools/text_to_3d/samples/{cat,dog,dragon,robot,chair,flower}.glb + manifest.json
+# 生成 6 个可辨认的卡通模型（纯 NumPy/trimesh，零下载、零 GPU、约 3 秒）
+tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/build_samples.py
+# 产物：tools/text_to_3d/samples/{dog,cat,dragon,robot,chair,flower}.glb + manifest.json
 ```
+
+生成的 GLB 带 `COLOR_0` 顶点色、`NORMAL` 平滑法线与 PBR 材质
+（App 的 model-viewer/three.js 可正确显示颜色，不会变白模）。
+脚本 `patch_glb()` 负责补齐法线与材质：trimesh 的 `ColorVisuals` 默认只写
+`POSITION/COLOR_0`，缺 NORMAL 会被 three.js 退化成硬边着色。
+
+### 4.2 亲眼看一眼再交付
+
+```bash
+# 纯 NumPy 软件光栅化，无 OpenGL / 无 GPU / 无显示器也能渲染三视图
+tools/text_to_3d/.venv/Scripts/python.exe tools/text_to_3d/render_glb.py \
+    tools/text_to_3d/samples/dog.glb tools/text_to_3d/samples/cat.glb \
+    -o preview.png
+```
+
+> 教训：只校验「文件头是 glTF、字节数正常」不等于模型能看。
+> 以前就是漏了这一步，把畸形网格当成品交付了。**改模型后务必渲染复验**。
 
 id 必须与 `lib/core/avatar3d/route_c_glb_store.dart` 的 `routeCSamples` 对齐。
 服务端启动时会自动读取该目录（`/api/samples` 返回清单）。
@@ -209,11 +239,45 @@ App 端逻辑在 `RouteCGlbStore.loadSample`：私有目录有缓存就直接读
 
 ## 5. 诚实边界
 
-- 模型是 **Shap-E（stylized / 低面数）**，产出是风格化 3D，**不是照片级写实**。
+- **样例**（App 里默认展示的那 6 个）是**程序化建模**，形状清晰可认，
+  但**不是 AI 生成的**；别把它当成文生 3D 的效果。
+- **「生成」按钮**用的才是 Shap-E text300M（2023 年的小模型）。在本机纯 CPU
+  上把 steps 降到 16、frame_size 降到 64 后，产出是**融化状、难以辨认**的
+  低质量网格，仅用于验证「文本→GLB」链路跑通，**不代表可用成品**。
+  想要照片级或可辨认的结果，这个 300M 模型做不到，需要换更大的模型 + GPU。
 - 中文经本地词表翻译（确定性替换，不是语义翻译）；复杂句式请直接用英文提示词。
-- 实时生成依赖**本机 PC 服务**；手机通过「同 Wi-Fi 直连（--host 0.0.0.0）」或
-  「USB + adb reverse」两种方式之一连到该服务，手机本身不跑模型。
-- 首次权重下载约 1~1.5 GB（一次性）；CPU 推理单张可能数十秒到数分钟，GPU 快很多。
+- 实时生成依赖**本机 PC 服务**；手机通过自动发现的局域网地址连过去，
+  手机本身不跑模型。
+- 首次权重下载约 1~1.5 GB（一次性）；CPU 推理单张约 2 分钟，GPU 快很多。
+
+## 5.5 端侧 AI 模型下载（与 3D 服务分开的 8080 端口）
+
+> **2026-11-14 修复**：此前「模型怎么都下不了」有四个叠加原因：
+> ① 内置清单 6 条全是 `models.example.com` 占位死链；
+> ② UI 把它们整体 `disabled: true`，点下载毫无反应；
+> ③ `gguf_server.py` 以 `--host 127.0.0.1` 启动，手机根本连不上；
+> ④ 服务目录里只有一个 1 MB 自检文件，没有真实模型。
+
+现在的状态：
+
+| 通道 | 地址 | 内容 |
+| --- | --- | --- |
+| 内置清单「可下载」项 | ModelScope 免费直链 | Qwen2.5-0.5B-Instruct Q4_K_M，491,400,032 B，SHA-256 校验 |
+| 本机自托管源 | 自动发现的 `http://<电脑IP>:8080` | 同一个 GGUF 文件，局域网高速下载，不耗手机流量 |
+
+电脑端启动（**必须 `--host 0.0.0.0`**，绑 127.0.0.1 手机连不上）：
+
+```bash
+python tools/gguf_server.py --dir ./tools/gguf_models --host 0.0.0.0 --port 8080
+```
+
+`gguf_server.py` 现在把 manifest 里的下载地址写成**相对路径**
+（`models/<file>`），由 App 按它自己访问服务时用的 Host 解析。
+旧版把 `--advertise-host` 写死成绝对 URL，导致手机明明拉到了清单、
+点下载却去连自己身上的 127.0.0.1，这是「下不了」最隐蔽的一环。
+
+App 端「模型源与下载」页同样会自动探测 8080 并覆盖内置源地址
+（`ModelSource.overrideBuiltInHost`），结果持久化，换 Wi-Fi 可点「重新扫描」。
 
 ---
 
